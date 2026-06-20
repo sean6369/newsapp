@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1781500363544,
+      "tag": "0000_add-on-update-cascade",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781512518128,
+      "tag": "0001_make-relevance-score-nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1750070400000,
+      "tag": "0002_add-source-id",
+      "breakpoints": true
+    }
+  ]
+}
