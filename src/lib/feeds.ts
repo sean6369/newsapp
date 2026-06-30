@@ -112,7 +112,7 @@ export async function scrapeDigestPage(
   try {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; LifeOS/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; NewsApp/1.0)",
       },
       signal: AbortSignal.timeout(15000),
     });
