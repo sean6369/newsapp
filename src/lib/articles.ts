@@ -36,11 +36,12 @@ export function extractSourceId(url: string): string {
   }
 }
 
-export function makeSlug(title: string, domain?: string): string {
+export function makeSlug(title: string, domain?: string, feed?: string): string {
   const base = slugify(title, { lower: true, strict: true }).slice(0, 80);
-  if (!domain) return base;
-  const domainSlug = domain.replace(/\./g, "-");
-  return `${base}-${domainSlug}`.slice(0, 120);
+  const parts = [base];
+  if (feed) parts.push(feed);
+  if (domain) parts.push(domain.replace(/\./g, "-"));
+  return parts.join("-").slice(0, 120);
 }
 
 export function buildArticle(
@@ -48,7 +49,7 @@ export function buildArticle(
   clippedContent: string | null
 ): { article: Article; content: string } {
   const domain = extractDomain(tldrArticle.sourceUrl);
-  const slug = makeSlug(tldrArticle.title, domain);
+  const slug = makeSlug(tldrArticle.title, domain, tldrArticle.feed);
 
   const isHNDiscussion = tldrArticle.sourceUrl.includes("news.ycombinator.com/item");
   const content = clippedContent

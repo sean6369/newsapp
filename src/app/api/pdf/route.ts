@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import remarkRehype from "remark-rehype";
 import rehypeRaw from "rehype-raw";
 import rehypeStringify from "rehype-stringify";
-import { getArticleBySlug, getArticleContent } from "@/lib/db/queries";
+import { getArticleBySlug, getArticleContent, getStorylineById } from "@/lib/db/queries";
 
 const GOTENBERG_URL = process.env.GOTENBERG_URL || "http://gotenberg:3000";
 
@@ -182,31 +182,10 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export async function GET(request: NextRequest) {
-  const slug = request.nextUrl.searchParams.get("slug");
-  if (!slug) {
-    return NextResponse.json({ error: "Missing slug parameter" }, { status: 400 });
-  }
-
-  const article = await getArticleBySlug(slug);
-  if (!article) {
-    return NextResponse.json({ error: "Article not found" }, { status: 404 });
-  }
-
-  const content = (await getArticleContent(slug)) ?? article.summary;
+async function generatePdf(title: string, meta: string, content: string, filename: string) {
   const bodyHtml = await markdownToHtml(content);
+  const html = buildHtml(escapeHtml(title), escapeHtml(meta), bodyHtml);
 
-  const title = escapeHtml(article.title);
-  const metaParts = [
-    escapeHtml(article.sourceDomain),
-    escapeHtml(article.date),
-    ...(article.readingTime > 0 ? [`${article.readingTime} min read`] : []),
-  ];
-  const meta = metaParts.join(" · ");
-
-  const html = buildHtml(title, meta, bodyHtml);
-
-  // Build multipart form data for Gotenberg
   const formData = new FormData();
   formData.append(
     "files",
@@ -237,7 +216,39 @@ export async function GET(request: NextRequest) {
   return new NextResponse(pdfBuffer, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="${slug}.pdf"`,
+      "Content-Disposition": `inline; filename="${filename}.pdf"`,
     },
   });
+}
+
+export async function GET(request: NextRequest) {
+  const slug = request.nextUrl.searchParams.get("slug");
+  const storylineId = request.nextUrl.searchParams.get("storylineId");
+
+  if (!slug && !storylineId) {
+    return NextResponse.json({ error: "Missing slug or storylineId parameter" }, { status: 400 });
+  }
+
+  if (storylineId) {
+    const storyline = await getStorylineById(Number(storylineId));
+    if (!storyline) {
+      return NextResponse.json({ error: "Storyline not found" }, { status: 404 });
+    }
+
+    const meta = `Synthesized from ${storyline.articles.length} source article${storyline.articles.length !== 1 ? "s" : ""}`;
+    return generatePdf(storyline.headline, meta, storyline.fullStory, `storyline-${storylineId}`);
+  }
+
+  const article = await getArticleBySlug(slug!);
+  if (!article) {
+    return NextResponse.json({ error: "Article not found" }, { status: 404 });
+  }
+
+  const content = (await getArticleContent(slug!)) ?? article.summary;
+  const metaParts = [
+    article.sourceDomain,
+    article.date,
+    ...(article.readingTime > 0 ? [`${article.readingTime} min read`] : []),
+  ];
+  return generatePdf(article.title, metaParts.join(" · "), content, slug!);
 }

@@ -21,7 +21,7 @@ const QUEUE_PRESSURE_THRESHOLD = 100; // chars in queue before speeding up
 let msgIdCounter = 0;
 const nextMsgId = () => `msg-${++msgIdCounter}`;
 
-export function useChat(slug: string): UseChatReturn {
+export function useChat(identifier: string): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -125,7 +125,12 @@ export function useChat(slug: string): UseChatReturn {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slug, messages: allMessages }),
+          body: JSON.stringify({
+            ...(identifier.startsWith("storyline:")
+              ? { storylineId: identifier.slice("storyline:".length) }
+              : { slug: identifier }),
+            messages: allMessages,
+          }),
           signal: abortRef.current.signal,
         });
 
@@ -208,7 +213,7 @@ export function useChat(slug: string): UseChatReturn {
         abortRef.current = null;
       }
     },
-    [slug, messages, isStreaming, enqueueTokens, waitForDrain]
+    [identifier, messages, isStreaming, enqueueTokens, waitForDrain]
   );
 
   const clearMessages = useCallback(() => {

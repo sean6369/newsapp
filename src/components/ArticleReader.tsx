@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -8,7 +9,7 @@ import rehypeRaw from "rehype-raw";
 import { Alert } from "@heroui/react/alert";
 import { Button } from "@heroui/react/button";
 import { Modal } from "@heroui/react/modal";
-import type { Article } from "@/lib/types";
+import type { Article, ArticleEntity, Topic } from "@/lib/types";
 import { shareViaTelegram } from "@/lib/telegram";
 import { downloadMarkdown, downloadPdf } from "@/lib/download";
 
@@ -103,11 +104,13 @@ function EmbedIframe({ width: _w, height: _h, style: _s, ...props }: ComponentPr
 interface ArticleReaderProps {
   article: Article;
   content: string;
+  entities: ArticleEntity[];
+  topics: Topic[];
   onToggleChat?: () => void;
   chatOpen?: boolean;
 }
 
-export function ArticleReader({ article, content, onToggleChat, chatOpen }: ArticleReaderProps) {
+export function ArticleReader({ article, content, entities, topics, onToggleChat, chatOpen }: ArticleReaderProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
 
@@ -236,7 +239,7 @@ export function ArticleReader({ article, content, onToggleChat, chatOpen }: Arti
                         className="text-left text-sm px-3 py-2 rounded-md hover:bg-border/50 transition-colors text-foreground"
                       >
                         PDF
-                        <span className="block text-xs text-muted">Save as PDF via print dialog</span>
+                        <span className="block text-xs text-muted">Save as PDF</span>
                       </button>
                     </Modal.Body>
                   </Modal.Dialog>
@@ -289,6 +292,54 @@ export function ArticleReader({ article, content, onToggleChat, chatOpen }: Arti
           Download
         </Button>
       </div>
+
+      {/* Entities & Topics */}
+      {(entities.length > 0 || topics.length > 0) && (
+        <div className="mt-10 border-t border-border pt-6" style={stagger(6)}>
+          <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-4">Entities & Topics</h2>
+
+          {topics.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-5">
+              {topics.map((t) => (
+                <span key={t.id} className="px-2.5 py-1 text-xs rounded-full bg-accent/10 text-accent font-medium">
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {entities.length > 0 && (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-muted border-b border-border">
+                  <th className="pb-2 font-medium">Entity</th>
+                  <th className="pb-2 font-medium">Type</th>
+                  <th className="pb-2 font-medium text-right">Salience</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entities.map((e) => (
+                  <tr key={e.id} className="border-b border-border/50">
+                    <td className="py-2">
+                      <Link href={`/entity/${e.id}`} className="text-foreground hover:text-accent hover:underline transition-colors">
+                        {e.name}
+                      </Link>
+                    </td>
+                    <td className="py-2">
+                      <span className="text-xs text-muted capitalize">{e.type}</span>
+                    </td>
+                    <td className="py-2 text-right">
+                      {e.salience != null && (
+                        <span className="text-xs text-muted tabular-nums">{e.salience.toFixed(2)}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
     </div>
   );

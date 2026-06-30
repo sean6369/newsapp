@@ -54,7 +54,7 @@ export function ChatPanel({ slug, onClose }: ChatPanelProps) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
         {messages.length === 0 && (
           <div className="text-center py-8">
-            <p className="text-sm text-muted">Ask a question about this article.</p>
+            <p className="text-sm text-muted">Ask a question about this {slug.startsWith("storyline:") ? "story" : "article"}.</p>
           </div>
         )}
         {messages.map((msg, i) => (

@@ -48,7 +48,7 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
+    <div className="max-w-7xl mx-auto px-4 md:px-6 py-8 pb-24 md:pb-28">
       <div className="flex justify-center mb-4">
         <DateNav
           dates={dates}

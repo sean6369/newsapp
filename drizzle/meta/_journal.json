@@ -22,6 +22,83 @@
       "when": 1750070400000,
       "tag": "0002_add-source-id",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782022272651,
+      "tag": "0003_curious_malice",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782236876292,
+      "tag": "0004_replace-graph-with-threads",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782700800000,
+      "tag": "0005_add-embeddings",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782317763791,
+      "tag": "0006_known_saracen",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782442505015,
+      "tag": "0007_third_barracuda",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782474763744,
+      "tag": "0008_wild_roxanne_simpson",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782494170409,
+      "tag": "0009_thick_the_renegades",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782556754299,
+      "tag": "0010_tiresome_starjammers",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1782662794220,
+      "tag": "0011_real_skreet",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1782664021222,
+      "tag": "0012_organic_ronan",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1782724222009,
+      "tag": "0013_dashing_greymalkin",
+      "breakpoints": true
     }
   ]
 }

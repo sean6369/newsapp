@@ -1,7 +1,7 @@
 import { eq, desc, asc, ilike, or, and, sql, isNull } from "drizzle-orm";
 import { db } from "./index";
-import { articles } from "./schema";
-import type { Article, ArticleFilters } from "../types";
+import { articles, entities, topics, articleEntities, articleTopics, storylines, storylineArticles } from "./schema";
+import type { Article, ArticleFilters, ArticleEntity, Topic, EntityType, EntitySortMode, EntityListItem } from "../types";
 
 const articleColumns = {
   slug: articles.slug,
@@ -24,8 +24,8 @@ const articleColumns = {
 export async function insertArticle(
   article: Article,
   content: string
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .insert(articles)
     .values({
       slug: article.slug,
@@ -42,7 +42,9 @@ export async function insertArticle(
       sourceId: article.sourceId,
       content,
     })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ slug: articles.slug });
+  return result.length > 0;
 }
 
 export async function getArticleBySlug(
@@ -198,7 +200,9 @@ export async function updateArticleMetadata(
   if (updates.title !== undefined) setClause.title = updates.title;
   if (updates.sourceUrl !== undefined) setClause.sourceUrl = updates.sourceUrl;
   if (updates.summary !== undefined) setClause.summary = updates.summary;
-  if (updates.content !== undefined) setClause.content = updates.content;
+  if (updates.content !== undefined) {
+    setClause.content = updates.content;
+  }
 
   await db
     .update(articles)
@@ -340,4 +344,455 @@ export async function getArticlesByStoryGroup(storyGroup: string): Promise<Artic
     .from(articles)
     .where(eq(articles.storyGroup, storyGroup));
   return rows.map((r) => rowToArticle(r));
+}
+
+// ── Entity & Topic functions ──────────────────────────────────────────
+
+export async function findOrCreateEntity(
+  name: string,
+  type: EntityType
+): Promise<number> {
+  // 1. Exact match
+  const existing = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(and(eq(entities.name, name), eq(entities.type, type)))
+    .limit(1);
+
+  if (existing.length > 0) return existing[0].id;
+
+  // 2. Insert new entity
+  const inserted = await db
+    .insert(entities)
+    .values({ name, type })
+    .onConflictDoNothing()
+    .returning({ id: entities.id });
+
+  // Race condition: another concurrent insert won
+  if (inserted.length === 0) {
+    const retry = await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(and(eq(entities.name, name), eq(entities.type, type)))
+      .limit(1);
+    return retry[0].id;
+  }
+
+  return inserted[0].id;
+}
+
+export async function linkArticleEntity(
+  articleSlug: string,
+  entityId: number,
+  salience: number
+): Promise<void> {
+  await db
+    .insert(articleEntities)
+    .values({ articleSlug, entityId, salience })
+    .onConflictDoNothing();
+}
+
+export async function linkArticleTopic(
+  articleSlug: string,
+  topicId: number
+): Promise<void> {
+  await db
+    .insert(articleTopics)
+    .values({ articleSlug, topicId })
+    .onConflictDoNothing();
+}
+
+export async function getTopicByName(
+  name: string
+): Promise<{ id: number } | null> {
+  const rows = await db
+    .select({ id: topics.id })
+    .from(topics)
+    .where(eq(topics.name, name))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function seedTopics(topicNames: readonly string[]): Promise<void> {
+  for (const name of topicNames) {
+    await db.insert(topics).values({ name }).onConflictDoNothing();
+  }
+}
+
+export async function getEntitiesForArticle(
+  slug: string
+): Promise<ArticleEntity[]> {
+  const rows = await db
+    .select({
+      id: entities.id,
+      name: entities.name,
+      type: entities.type,
+      salience: articleEntities.salience,
+    })
+    .from(articleEntities)
+    .innerJoin(entities, eq(articleEntities.entityId, entities.id))
+    .where(eq(articleEntities.articleSlug, slug))
+    .orderBy(desc(articleEntities.salience));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    type: r.type as EntityType,
+    salience: r.salience,
+  }));
+}
+
+export async function getTopicsForArticle(
+  slug: string
+): Promise<Topic[]> {
+  return db
+    .select({ id: topics.id, name: topics.name })
+    .from(articleTopics)
+    .innerJoin(topics, eq(articleTopics.topicId, topics.id))
+    .where(eq(articleTopics.articleSlug, slug));
+}
+
+export async function getEntityById(
+  id: number
+): Promise<{ id: number; name: string; type: EntityType } | null> {
+  const rows = await db
+    .select({ id: entities.id, name: entities.name, type: entities.type })
+    .from(entities)
+    .where(eq(entities.id, id))
+    .limit(1);
+  return rows[0]
+    ? { id: rows[0].id, name: rows[0].name, type: rows[0].type as EntityType }
+    : null;
+}
+
+export async function getArticlesForEntity(
+  entityId: number
+): Promise<Article[]> {
+  const rows = await db
+    .select(articleColumns)
+    .from(articles)
+    .innerJoin(articleEntities, eq(articles.slug, articleEntities.articleSlug))
+    .where(eq(articleEntities.entityId, entityId))
+    .orderBy(desc(articles.createdAt));
+  return rows.map((r) => rowToArticle(r));
+}
+
+export async function getArticlesWithoutEntities(
+  limit = 50,
+  date?: string
+): Promise<Array<{ slug: string; title: string; summary: string }>> {
+  const dateFilter = date ? sql` AND a.date = ${date}` : sql``;
+  const rows = await db.execute(sql`
+    SELECT a.slug, a.title, a.summary
+    FROM articles a
+    LEFT JOIN article_entities ae ON a.slug = ae.article_slug
+    WHERE ae.article_slug IS NULL${dateFilter}
+    ORDER BY a.created_at DESC
+    LIMIT ${limit}
+  `);
+  return rows as unknown as Array<{ slug: string; title: string; summary: string }>;
+}
+
+export async function clearAllEntities(): Promise<void> {
+  await db.execute(sql`TRUNCATE article_entities, article_topics, entities CASCADE`);
+}
+
+export async function getCoOccurringEntities(
+  entityId: number,
+  minSharedArticles = 2
+): Promise<Array<{ entityId: number; name: string; type: string; sharedCount: number }>> {
+  const rows = await db.execute(sql`
+    SELECT
+      e2.id AS entity_id,
+      e2.name,
+      e2.type,
+      COUNT(DISTINCT ae1.article_slug)::int AS shared_count
+    FROM article_entities ae1
+    JOIN article_entities ae2 ON ae1.article_slug = ae2.article_slug
+      AND ae1.entity_id <> ae2.entity_id
+    JOIN entities e2 ON ae2.entity_id = e2.id
+    WHERE ae1.entity_id = ${entityId}
+    GROUP BY e2.id, e2.name, e2.type
+    HAVING COUNT(DISTINCT ae1.article_slug) >= ${minSharedArticles}
+    ORDER BY shared_count DESC
+    LIMIT 10
+  `);
+  return (rows as unknown as Array<{ entity_id: number; name: string; type: string; shared_count: number }>).map((r) => ({
+    entityId: r.entity_id,
+    name: r.name,
+    type: r.type,
+    sharedCount: r.shared_count,
+  }));
+}
+
+export async function getTrendingEntities(
+  hours = 48,
+  limit = 20
+): Promise<Array<{ id: number; name: string; type: EntityType; score: number; mentionCount: number; previousRank: number | null }>> {
+  const previousHours = hours * 2;
+  const rows = await db.execute(sql`
+    WITH current_ranked AS (
+      SELECT e.id, e.name, e.type,
+        (AVG(ae.salience) * LN(COUNT(*) + 1))::real AS score,
+        COUNT(*)::int AS mention_count,
+        RANK() OVER (ORDER BY (AVG(ae.salience) * LN(COUNT(*) + 1)) DESC)::int AS rnk
+      FROM article_entities ae
+      JOIN entities e ON ae.entity_id = e.id
+      JOIN articles a ON ae.article_slug = a.slug
+      WHERE a.created_at >= NOW() - INTERVAL '1 hour' * ${hours}
+      GROUP BY e.id, e.name, e.type
+    ),
+    previous_ranked AS (
+      SELECT e.id,
+        RANK() OVER (ORDER BY (AVG(ae.salience) * LN(COUNT(*) + 1)) DESC)::int AS rnk
+      FROM article_entities ae
+      JOIN entities e ON ae.entity_id = e.id
+      JOIN articles a ON ae.article_slug = a.slug
+      WHERE a.created_at >= NOW() - INTERVAL '1 hour' * ${previousHours}
+        AND a.created_at < NOW() - INTERVAL '1 hour' * ${hours}
+      GROUP BY e.id
+    )
+    SELECT c.id, c.name, c.type, c.score, c.mention_count,
+      p.rnk AS previous_rank
+    FROM current_ranked c
+    LEFT JOIN previous_ranked p ON c.id = p.id
+    ORDER BY c.score DESC
+    LIMIT ${limit}
+  `);
+  return (rows as unknown as Array<{ id: number; name: string; type: string; score: number; mention_count: number; previous_rank: number | null }>).map((r) => ({
+    id: r.id,
+    name: r.name,
+    type: r.type as EntityType,
+    score: r.score,
+    mentionCount: r.mention_count,
+    previousRank: r.previous_rank,
+  }));
+}
+
+export interface RecentArticle {
+  slug: string;
+  title: string;
+  summary: string;
+  content: string | null;
+  sourceDomain: string;
+}
+
+export async function getRecentArticlesForEntities(
+  entityIds: number[],
+  hours = 48
+): Promise<Map<number, RecentArticle[]>> {
+  if (entityIds.length === 0) return new Map();
+
+  const rows = await db.execute(sql`
+    SELECT ae.entity_id, a.slug, a.title, a.summary, a.content, a.source_domain
+    FROM article_entities ae
+    JOIN articles a ON ae.article_slug = a.slug
+    WHERE ae.entity_id IN (${sql.join(entityIds.map((id) => sql`${id}`), sql`, `)})
+      AND a.created_at >= NOW() - INTERVAL '1 hour' * ${hours}
+    ORDER BY ae.entity_id, a.created_at DESC
+  `);
+
+  const result = new Map<number, RecentArticle[]>();
+  for (const r of rows as unknown as Array<{ entity_id: number; slug: string; title: string; summary: string; content: string | null; source_domain: string }>) {
+    let list = result.get(r.entity_id);
+    if (!list) {
+      list = [];
+      result.set(r.entity_id, list);
+    }
+    list.push({ slug: r.slug, title: r.title, summary: r.summary, content: r.content, sourceDomain: r.source_domain });
+  }
+  return result;
+}
+
+export async function getAllEntities(options?: {
+  type?: EntityType;
+  search?: string;
+  sort?: EntitySortMode;
+  limit?: number;
+  offset?: number;
+}): Promise<{ entities: EntityListItem[]; total: number }> {
+  const { type, search, sort = "trending", limit = 200, offset = 0 } = options ?? {};
+
+  const typeFilter = type ? sql` AND e.type = ${type}` : sql``;
+  const searchFilter = search ? sql` AND e.name ILIKE ${"%" + search + "%"}` : sql``;
+
+  const orderClause =
+    sort === "alphabetical"
+      ? sql`ORDER BY e.name ASC`
+      : sort === "mentions"
+        ? sql`ORDER BY mention_count DESC, e.name ASC`
+        : sort === "recent"
+          ? sql`ORDER BY last_seen_at DESC NULLS LAST, e.name ASC`
+          : sql`ORDER BY trending_score DESC, mention_count DESC`;
+
+  const rows = await db.execute(sql`
+    SELECT
+      e.id,
+      e.name,
+      e.type,
+      COUNT(ae.article_slug)::int AS mention_count,
+      COALESCE(COUNT(ae.article_slug) FILTER (WHERE a.created_at >= NOW() - INTERVAL '48 hours'), 0)::int AS trending_mention_count,
+      COALESCE(SUM(ae.salience), 0)::real AS total_salience,
+      (COALESCE(AVG(ae.salience) FILTER (WHERE a.created_at >= NOW() - INTERVAL '48 hours'), 0)
+        * LN(COALESCE(COUNT(ae.article_slug) FILTER (WHERE a.created_at >= NOW() - INTERVAL '48 hours'), 0) + 1))::real AS trending_score,
+      TO_CHAR(MAX(a.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_seen_at,
+      COUNT(*) OVER () AS full_count
+    FROM entities e
+    LEFT JOIN article_entities ae ON e.id = ae.entity_id
+    LEFT JOIN articles a ON ae.article_slug = a.slug
+    WHERE 1=1${typeFilter}${searchFilter}
+    GROUP BY e.id, e.name, e.type
+    HAVING COUNT(ae.article_slug) > 0
+    ${orderClause}
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `);
+
+  type Row = {
+    id: number;
+    name: string;
+    type: string;
+    mention_count: number;
+    trending_mention_count: number;
+    total_salience: number;
+    trending_score: number;
+    last_seen_at: string | null;
+    full_count: number;
+  };
+
+  const typedRows = rows as unknown as Row[];
+  const total = typedRows.length > 0 ? Number(typedRows[0].full_count) : 0;
+
+  return {
+    entities: typedRows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      type: r.type as EntityType,
+      mentionCount: r.mention_count,
+      trendingMentionCount: r.trending_mention_count,
+      totalSalience: r.total_salience,
+      trendingScore: r.trending_score,
+      lastSeenAt: r.last_seen_at,
+    })),
+    total,
+  };
+}
+
+// ── Storyline functions ───────────────────────────────────────────────
+
+export async function getRecentArticles(): Promise<Array<{ slug: string; title: string; summary: string; content: string | null; sourceDomain: string }>> {
+  const rows = await db.execute(sql`
+    SELECT slug, title, summary, content, source_domain AS "sourceDomain"
+    FROM articles
+    WHERE date >= to_char((NOW() AT TIME ZONE 'Asia/Singapore')::date - 3, 'YYYY-MM-DD')
+      AND date < to_char((NOW() AT TIME ZONE 'Asia/Singapore')::date, 'YYYY-MM-DD')
+    ORDER BY date DESC, created_at DESC
+  `);
+  return rows as unknown as Array<{ slug: string; title: string; summary: string; content: string | null; sourceDomain: string }>;
+}
+
+export async function insertStoryline(
+  headline: string,
+  summary: string,
+  fullStory: string,
+  articleSlugs: string[],
+  batchDate: string
+): Promise<number> {
+  const [row] = await db
+    .insert(storylines)
+    .values({ headline, summary, fullStory, batchDate })
+    .returning({ id: storylines.id });
+
+  const uniqueSlugs = [...new Set(articleSlugs)];
+  if (uniqueSlugs.length > 0) {
+    await db.insert(storylineArticles).values(
+      uniqueSlugs.map((slug) => ({ storylineId: row.id, articleSlug: slug }))
+    );
+  }
+
+  return row.id;
+}
+
+export async function deleteStorylinesByBatch(batchDate: string): Promise<void> {
+  await db.delete(storylines).where(eq(storylines.batchDate, batchDate));
+}
+
+export async function getTopStorylines(): Promise<{
+  storylines: Array<{
+    id: number;
+    headline: string;
+    summary: string;
+    articleCount: number;
+    recentArticleCount: number;
+  }>;
+  generatedAt: Date | null;
+}> {
+  const rows = await db.execute(sql`
+    SELECT
+      s.id,
+      s.headline,
+      s.summary,
+      s.created_at AT TIME ZONE 'UTC' AS created_at,
+      (SELECT COUNT(*)::int FROM storyline_articles sa WHERE sa.storyline_id = s.id) AS article_count,
+      (SELECT COUNT(*)::int FROM storyline_articles sa
+        JOIN articles a ON sa.article_slug = a.slug
+        WHERE sa.storyline_id = s.id
+          AND a.date = to_char((NOW() AT TIME ZONE 'Asia/Singapore')::date - 1, 'YYYY-MM-DD')) AS recent_article_count
+    FROM storylines s
+    WHERE s.batch_date = (SELECT MAX(batch_date) FROM storylines)
+    ORDER BY s.id
+  `);
+  const typed = rows as unknown as Array<{
+    id: number;
+    headline: string;
+    summary: string;
+    created_at: Date;
+    article_count: number;
+    recent_article_count: number;
+  }>;
+  return {
+    storylines: typed.map((r) => ({
+      id: r.id,
+      headline: r.headline,
+      summary: r.summary,
+      articleCount: r.article_count,
+      recentArticleCount: r.recent_article_count,
+    })),
+    generatedAt: typed.length > 0 ? new Date(typed[0].created_at) : null,
+  };
+}
+
+export async function getStorylineById(id: number): Promise<{
+  id: number;
+  headline: string;
+  summary: string;
+  fullStory: string;
+  articles: Article[];
+} | null> {
+  const [row] = await db
+    .select({
+      id: storylines.id,
+      headline: storylines.headline,
+      summary: storylines.summary,
+      fullStory: storylines.fullStory,
+    })
+    .from(storylines)
+    .where(eq(storylines.id, id))
+    .limit(1);
+
+  if (!row) return null;
+
+  const articleRows = await db
+    .select(articleColumns)
+    .from(storylineArticles)
+    .innerJoin(articles, eq(storylineArticles.articleSlug, articles.slug))
+    .where(eq(storylineArticles.storylineId, id))
+    .orderBy(desc(articles.createdAt));
+
+  return {
+    id: row.id,
+    headline: row.headline,
+    summary: row.summary,
+    fullStory: row.fullStory,
+    articles: articleRows.map((r) => rowToArticle(r)),
+  };
 }

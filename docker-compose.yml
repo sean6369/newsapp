@@ -1,0 +1,50 @@
+services:
+  app:
+    image: seanlsk/newsapp:latest
+    container_name: newsapp-app
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      DATABASE_URL: postgresql://newsapp:newsapp@db:5432/newsapp
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.5-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ENABLE_PIPELINE: ${ENABLE_PIPELINE:-true}
+      GOTENBERG_URL: http://gotenberg:3000
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - newsapp-net
+
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: newsapp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: newsapp
+      POSTGRES_PASSWORD: newsapp
+      POSTGRES_DB: newsapp
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newsapp"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - newsapp-net
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    networks:
+      - newsapp-net
+
+volumes:
+  pg_data:
+
+networks:
+  newsapp-net:
+    driver: bridge

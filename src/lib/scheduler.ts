@@ -1,10 +1,12 @@
 import * as cron from "node-cron";
 import { runFetchPipeline } from "./pipeline";
+import { generateAndStoreStorylines } from "./extractor";
 
-let task: ReturnType<typeof cron.schedule> | null = null;
+let fetchTask: ReturnType<typeof cron.schedule> | null = null;
+let storylineTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
-  if (task) return;
+  if (fetchTask) return;
 
   if (process.env.ENABLE_PIPELINE === "false") {
     console.log("[scheduler] Pipeline disabled (ENABLE_PIPELINE=false)");
@@ -12,7 +14,7 @@ export function startScheduler() {
   }
 
   // Run every hour to ensure we don't miss a day if the server was down
-  task = cron.schedule("0 * * * *", async () => {
+  fetchTask = cron.schedule("0 * * * *", async () => {
     console.log("[scheduler] Running hourly fetch pipeline...");
     try {
       const result = await runFetchPipeline();
@@ -22,12 +24,28 @@ export function startScheduler() {
     }
   });
 
-  console.log("[scheduler] Fetch pipeline scheduled to run every hour");
+  // Generate top storylines daily at 7:30 AM
+  storylineTask = cron.schedule("30 7 * * *", async () => {
+    console.log("[scheduler] Running daily storyline generation...");
+    try {
+      const result = await generateAndStoreStorylines();
+      console.log("[scheduler] Storylines complete:", result);
+    } catch (error) {
+      console.error("[scheduler] Storyline generation failed:", error);
+    }
+  });
+
+  console.log("[scheduler] Fetch pipeline scheduled hourly");
+  console.log("[scheduler] Storyline generation scheduled daily at 7:30 AM");
 }
 
 export function stopScheduler() {
-  if (task) {
-    task.stop();
-    task = null;
+  if (fetchTask) {
+    fetchTask.stop();
+    fetchTask = null;
+  }
+  if (storylineTask) {
+    storylineTask.stop();
+    storylineTask = null;
   }
 }

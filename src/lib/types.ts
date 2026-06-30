@@ -50,6 +50,36 @@ export interface ArticleFilters {
   sort?: "date-desc" | "date-asc" | "relevance";
 }
 
+export type EntityType = "person" | "organization" | "location" | "product";
+
+export interface Entity {
+  id: number;
+  name: string;
+  type: EntityType;
+}
+
+export interface ArticleEntity extends Entity {
+  salience: number | null;
+}
+
+export interface Topic {
+  id: number;
+  name: string;
+}
+
+export type EntitySortMode = "trending" | "mentions" | "alphabetical" | "recent";
+
+export interface EntityListItem {
+  id: number;
+  name: string;
+  type: EntityType;
+  mentionCount: number;
+  trendingMentionCount: number;
+  totalSalience: number;
+  trendingScore: number;
+  lastSeenAt: string | null;
+}
+
 export interface PipelineResult {
   date: string;
   totalFound: number;

@@ -11,7 +11,9 @@ export async function scoreArticle(article: {
   feed: string;
 }): Promise<number | null> {
   try {
-    const prompt = `You are a relevance scorer. Rate this article on 4 dimensions with the given ranges. Use the full range — do NOT round to multiples of 5.
+    const prompt = `You are a news relevance scorer. Rate this article on 4 dimensions with the given ranges.
+Do NOT round scores to multiples of 5 — use precise values like 17, 23, 6.
+Use the full range of each dimension: give low scores to weak matches and high scores to strong ones.
 
 DIMENSIONS:
 - Relevance (0-40): How closely does this match the user's stated interests? (0 = completely unrelated, 40 = core interest)
@@ -28,7 +30,7 @@ Summary: ${article.summary}
 Category: ${article.category}
 Feed: ${article.feed}
 
-Respond with ONLY four integers separated by commas (e.g. "28,15,6,22"). No other text.`;
+Respond with ONLY four integers separated by commas (e.g. "28,17,6,22"). No other text.`;
 
     const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
       method: "POST",

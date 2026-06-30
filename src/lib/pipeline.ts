@@ -12,6 +12,8 @@ import { clipArticle } from "./clipper";
 import { buildArticle } from "./articles";
 import { insertArticle, getArticleBySourceId, getArticleBySourceUrl, updateArticleMetadata, matchStories } from "./db/queries";
 import { scoreArticle } from "./scorer";
+import { extractAndLinkForArticle } from "./extractor";
+import { extractDomain, makeSlug } from "./articles";
 import type { TLDRArticle, PipelineResult } from "./types";
 
 const MAX_CONCURRENT = 3;
@@ -152,10 +154,13 @@ export async function runFetchPipeline(options?: {
     skippedExisting: unique.length - newArticles.length,
   };
 
+  // 6. Match stories across sources (CNA ↔ ST) — before insertion so storyGroup dedup works
+  await matchStories();
+
   if (newArticles.length > 0) {
     console.log(`[pipeline] Processing ${newArticles.length} new articles...`);
 
-    // 6. Clip and insert to database
+    // 7. Clip and insert to database
     await processInBatches(newArticles, MAX_CONCURRENT, async (tldrArticle) => {
       const clipped = await clipArticle(tldrArticle.sourceUrl);
 
@@ -167,14 +172,34 @@ export async function runFetchPipeline(options?: {
 
       const { article, content } = buildArticle(tldrArticle, clipped?.content || null);
       article.relevanceScore = await scoreArticle(tldrArticle);
-      await insertArticle(article, content);
+      const inserted = await insertArticle(article, content);
+
+      if (!inserted) {
+        console.log(`[pipeline] Skipped duplicate slug "${article.slug}"`);
+      }
     });
   } else {
     console.log("[pipeline] No new articles to process");
   }
 
-  // 7. Match stories across sources (CNA ↔ ST)
-  await matchStories();
+  // 8. Extract entities and topics for newly inserted articles
+  if (newArticles.length > 0) {
+    const slugsToExtract = newArticles.map((a) =>
+      makeSlug(a.title, extractDomain(a.sourceUrl), a.feed)
+    );
+
+    console.log(`[pipeline] Extracting entities/topics for ${slugsToExtract.length} articles...`);
+    let extracted = 0;
+    await processInBatches(slugsToExtract, MAX_CONCURRENT, async (slug) => {
+      try {
+        const success = await extractAndLinkForArticle(slug);
+        if (success) extracted++;
+      } catch (err) {
+        console.error(`[pipeline] Extraction failed for ${slug}:`, err);
+      }
+    });
+    console.log(`[pipeline] Extracted entities/topics for ${extracted}/${slugsToExtract.length} articles`);
+  }
 
   console.log(
     `[pipeline] Done: ${result.clipped} clipped, ${result.failedClips} failed, ${result.skippedExisting} skipped`

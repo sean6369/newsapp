@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
-import { getArticleBySlug, getArticleContent } from "@/lib/db/queries";
-import { buildSystemPrompt } from "@/lib/chat";
+import { getArticleBySlug, getArticleContent, getStorylineById } from "@/lib/db/queries";
+import { buildSystemPrompt, buildStorylineSystemPrompt } from "@/lib/chat";
 import type { SearchSource } from "@/lib/types";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
@@ -8,19 +8,28 @@ const GEMINI_MODEL = process.env.GEMINI_CHAT_MODEL || "gemini-2.5-flash";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`;
 
 export async function POST(request: NextRequest) {
-  const { slug, messages } = await request.json();
+  const { slug, storylineId, messages } = await request.json();
 
-  if (!slug || !messages) {
-    return new Response("Missing slug or messages", { status: 400 });
+  if ((!slug && !storylineId) || !messages) {
+    return new Response("Missing slug/storylineId or messages", { status: 400 });
   }
 
-  const article = await getArticleBySlug(slug);
-  if (!article) {
-    return new Response("Article not found", { status: 404 });
-  }
+  let systemPrompt: string;
 
-  const markdown = (await getArticleContent(slug)) ?? article.summary;
-  const systemPrompt = buildSystemPrompt(markdown, article);
+  if (storylineId) {
+    const storyline = await getStorylineById(Number(storylineId));
+    if (!storyline) {
+      return new Response("Storyline not found", { status: 404 });
+    }
+    systemPrompt = buildStorylineSystemPrompt(storyline);
+  } else {
+    const article = await getArticleBySlug(slug);
+    if (!article) {
+      return new Response("Article not found", { status: 404 });
+    }
+    const markdown = (await getArticleContent(slug)) ?? article.summary;
+    systemPrompt = buildSystemPrompt(markdown, article);
+  }
 
   // Convert messages to Gemini format ("model" instead of "assistant")
   const contents = messages.map((m: { role: string; content: string }) => ({
