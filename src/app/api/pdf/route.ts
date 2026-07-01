@@ -216,7 +216,7 @@ async function generatePdf(title: string, meta: string, content: string, filenam
   return new NextResponse(pdfBuffer, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="${filename}.pdf"`,
+      "Content-Disposition": `inline; filename="${filename.replace(/["\\\r\n]/g, "")}.pdf"`,
     },
   });
 }

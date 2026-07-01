@@ -81,12 +81,13 @@ export async function queryArticles(
     conditions.push(eq(articles.date, filters.date));
   }
   if (filters.search) {
+    const escaped = filters.search.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
     conditions.push(
       or(
-        ilike(articles.title, `%${filters.search}%`),
-        ilike(articles.summary, `%${filters.search}%`),
-        ilike(articles.content, `%${filters.search}%`),
-        ilike(articles.sourceUrl, `%${filters.search}%`)
+        ilike(articles.title, `%${escaped}%`),
+        ilike(articles.summary, `%${escaped}%`),
+        ilike(articles.content, `%${escaped}%`),
+        ilike(articles.sourceUrl, `%${escaped}%`)
       )
     );
   }

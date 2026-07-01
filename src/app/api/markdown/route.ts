@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
   return new NextResponse(header + content, {
     headers: {
       "Content-Type": "text/markdown; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${slug}.md"`,
+      "Content-Disposition": `attachment; filename="${slug.replace(/["\\\r\n]/g, "")}.md"`,
     },
   });
 }

@@ -154,13 +154,10 @@ export async function runFetchPipeline(options?: {
     skippedExisting: unique.length - newArticles.length,
   };
 
-  // 6. Match stories across sources (CNA ↔ ST) — before insertion so storyGroup dedup works
-  await matchStories();
-
   if (newArticles.length > 0) {
     console.log(`[pipeline] Processing ${newArticles.length} new articles...`);
 
-    // 7. Clip and insert to database
+    // 6. Clip and insert to database
     await processInBatches(newArticles, MAX_CONCURRENT, async (tldrArticle) => {
       const clipped = await clipArticle(tldrArticle.sourceUrl);
 
@@ -181,6 +178,9 @@ export async function runFetchPipeline(options?: {
   } else {
     console.log("[pipeline] No new articles to process");
   }
+
+  // 7. Match stories across sources (CNA ↔ ST) — runs after insertion so new articles are included
+  await matchStories();
 
   // 8. Extract entities and topics for newly inserted articles
   if (newArticles.length > 0) {

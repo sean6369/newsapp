@@ -3,7 +3,7 @@ import { getArticlesWithoutEntities, clearAllEntities } from "@/lib/db/queries";
 import { extractAndLinkForArticle } from "@/lib/extractor";
 
 export async function POST(request: NextRequest) {
-  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "50");
+  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "50", 10) || 50;
   const clear = request.nextUrl.searchParams.get("clear") === "true";
   const date = request.nextUrl.searchParams.get("date") ?? undefined;
 

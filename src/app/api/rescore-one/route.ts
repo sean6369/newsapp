@@ -3,11 +3,13 @@ import { getArticleBySlug, updateRelevanceScore } from "@/lib/db/queries";
 import { scoreArticle } from "@/lib/scorer";
 
 export async function POST(request: NextRequest) {
-  const { slug } = await request.json();
+  const body = await request.json().catch(() => null);
 
-  if (!slug || typeof slug !== "string") {
+  if (!body?.slug || typeof body.slug !== "string") {
     return NextResponse.json({ error: "slug is required" }, { status: 400 });
   }
+
+  const { slug } = body;
 
   const article = await getArticleBySlug(slug);
   if (!article) {
