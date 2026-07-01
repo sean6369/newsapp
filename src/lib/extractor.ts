@@ -33,7 +33,7 @@ interface ExtractionResult {
   topics: string[];
 }
 
-export async function extractEntitiesAndTopics(article: {
+async function extractEntitiesAndTopics(article: {
   title: string;
   summary: string;
   content: string | null;
@@ -198,21 +198,14 @@ export async function extractAndLinkForArticle(slug: string): Promise<boolean> {
   return true;
 }
 
-export interface StorylineCluster {
+interface StorylineCluster {
   headline: string;
   summary: string;
   articleIndices: number[];
 }
 
-export interface Storyline {
-  headline: string;
-  summary: string;
-  fullStory: string;
-  articleSlugs: string[];
-}
-
 /** Pass 1: Cluster articles into storylines using titles + summaries */
-export async function clusterStorylines(
+async function clusterStorylines(
   articles: Array<{ title: string; summary: string }>
 ): Promise<StorylineCluster[] | null> {
   if (articles.length === 0) return [];
@@ -306,7 +299,7 @@ ${articleList}`;
 }
 
 /** Pass 2: Generate a full story from article content for a single cluster */
-export async function generateFullStory(
+async function generateFullStory(
   headline: string,
   articles: Array<{ title: string; content: string | null; summary: string }>
 ): Promise<string | null> {

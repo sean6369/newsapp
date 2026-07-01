@@ -34,6 +34,8 @@ export function useChat(identifier: string): UseChatReturn {
   const rafRef = useRef<number | null>(null);
   const doneStreamingRef = useRef(false);
 
+  const flushQueueRef = useRef<() => void>(null!);
+
   const flushQueue = useCallback(() => {
     rafRef.current = null;
 
@@ -41,7 +43,7 @@ export function useChat(identifier: string): UseChatReturn {
       // Nothing left to drain — if stream is done, finalize
       if (doneStreamingRef.current) return;
       // Otherwise keep polling for new tokens
-      rafRef.current = requestAnimationFrame(flushQueue);
+      rafRef.current = requestAnimationFrame(flushQueueRef.current);
       return;
     }
 
@@ -71,9 +73,11 @@ export function useChat(identifier: string): UseChatReturn {
 
     // Keep draining if there's more, or if stream is still open
     if (queueRef.current.length > 0 || !doneStreamingRef.current) {
-      rafRef.current = requestAnimationFrame(flushQueue);
+      rafRef.current = requestAnimationFrame(flushQueueRef.current);
     }
   }, []);
+
+  flushQueueRef.current = flushQueue; // eslint-disable-line react-hooks/refs -- ref enables recursive requestAnimationFrame without circular const reference
 
   const enqueueTokens = useCallback(
     (text: string) => {

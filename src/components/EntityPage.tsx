@@ -13,8 +13,7 @@ import { ArticleCard } from "./ArticleCard";
 import { ArticleRow } from "./ArticleRow";
 import { FeedSort } from "./FeedFilter";
 import { groupByStory } from "@/lib/group-stories";
-
-type ViewMode = "grid" | "list";
+import type { ViewMode } from "./ArticleGrid";
 type SortMode = ArticleFilters["sort"];
 
 const typeColor: Record<string, string> = {

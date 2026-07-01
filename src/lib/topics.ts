@@ -39,4 +39,3 @@ export const TOPIC_TAXONOMY = [
   "Energy",
 ] as const;
 
-export type TopicName = (typeof TOPIC_TAXONOMY)[number];

@@ -1,7 +1,6 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-expect-error -- no type declarations for turndown-plugin-gfm
 import { gfm } from "turndown-plugin-gfm";
 
@@ -51,7 +50,7 @@ turndown.addRule("details-summary", {
   },
 });
 
-export interface ClipResult {
+interface ClipResult {
   content: string;
   title: string;
 }

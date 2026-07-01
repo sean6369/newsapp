@@ -70,19 +70,18 @@ export function EntitiesListing({
   const [typeFilter, setTypeFilter] = useState<EntityType | "all">("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<EntitySortMode>("trending");
-  const [entities, setEntities] = useState<EntityListItem[]>(initialEntities);
-  const [total, setTotal] = useState(initialTotal);
+  const [fetchedEntities, setFetchedEntities] = useState<EntityListItem[] | null>(null);
+  const [fetchedTotal, setFetchedTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const isDefault = typeFilter === "all" && sort === "trending" && !search.trim();
 
+  const entities = isDefault ? initialEntities : (fetchedEntities ?? initialEntities);
+  const total = isDefault ? initialTotal : (fetchedTotal ?? initialTotal);
+
   // Server-side fetch on any filter/sort/search change
   useEffect(() => {
-    if (isDefault) {
-      setEntities(initialEntities);
-      setTotal(initialTotal);
-      return;
-    }
+    if (isDefault) return;
 
     const timer = setTimeout(async () => {
       abortRef.current?.abort();
@@ -98,8 +97,8 @@ export function EntitiesListing({
         const res = await fetch(`/api/entities?${params}`, { signal: controller.signal });
         if (!res.ok) throw new Error("Fetch failed");
         const data = await res.json();
-        setEntities(data.entities);
-        setTotal(data.total);
+        setFetchedEntities(data.entities);
+        setFetchedTotal(data.total);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
       } finally {

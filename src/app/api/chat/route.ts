@@ -66,7 +66,6 @@ export async function POST(request: NextRequest) {
 
         const decoder = new TextDecoder();
         let buffer = "";
-        let sentSearching = false;
         const sources = new Map<string, SearchSource>();
 
         const processLine = (line: string) => {

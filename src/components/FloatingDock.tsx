@@ -47,7 +47,7 @@ function FloatingDockMobile({
   const pathname = usePathname();
 
   useEffect(() => {
-    setOpen(false);
+    setOpen(false); // eslint-disable-line react-hooks/set-state-in-effect -- close mobile menu on navigation
   }, [pathname]);
 
   return (

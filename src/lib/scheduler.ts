@@ -3,7 +3,6 @@ import { runFetchPipeline } from "./pipeline";
 import { generateAndStoreStorylines } from "./extractor";
 
 let fetchTask: ReturnType<typeof cron.schedule> | null = null;
-let storylineTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
   if (fetchTask) return;
@@ -25,7 +24,7 @@ export function startScheduler() {
   });
 
   // Generate top storylines daily at 7:30 AM
-  storylineTask = cron.schedule("30 7 * * *", async () => {
+  cron.schedule("30 7 * * *", async () => {
     console.log("[scheduler] Running daily storyline generation...");
     try {
       const result = await generateAndStoreStorylines();
@@ -39,13 +38,3 @@ export function startScheduler() {
   console.log("[scheduler] Storyline generation scheduled daily at 7:30 AM");
 }
 
-export function stopScheduler() {
-  if (fetchTask) {
-    fetchTask.stop();
-    fetchTask = null;
-  }
-  if (storylineTask) {
-    storylineTask.stop();
-    storylineTask = null;
-  }
-}

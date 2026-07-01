@@ -1,5 +1,6 @@
 "use client";
 
+/* eslint-disable react-hooks/refs -- Animation state (generation counters, previous keys, FLIP flags) uses refs during render intentionally to avoid cascading re-renders */
 import { useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { motion } from "motion/react";
 import type { ArticleWithRelated } from "@/lib/types";

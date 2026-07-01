@@ -98,7 +98,7 @@ export function useArticles(): UseArticlesReturn {
   const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
   const initializedRef = useRef(!!searchParams.get("date") || !!lastKnownLatestDate);
   const filtersRef = useRef(filters);
-  filtersRef.current = filters;
+  filtersRef.current = filters; // eslint-disable-line react-hooks/refs -- keep ref in sync with latest state for use in callbacks
   const latestDateRef = useRef<string | undefined>(undefined);
 
   // Debounce search value for SWR key
@@ -110,7 +110,7 @@ export function useArticles(): UseArticlesReturn {
   // SWR key uses debounced search to avoid fetching on every keystroke
   const swrKey = buildSwrKey({ ...filters, search: debouncedSearch });
 
-  const { data, error: swrError, isLoading, isValidating, mutate } = useSWR<ArticlesData>(
+  const { data, error: swrError, isValidating, mutate } = useSWR<ArticlesData>(
     swrKey,
     fetcher,
     {

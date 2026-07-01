@@ -1,4 +1,4 @@
-import { sql, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { db } from "../src/lib/db/index";
 import { articles } from "../src/lib/db/schema";
 import { scoreArticle } from "../src/lib/scorer";

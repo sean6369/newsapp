@@ -152,19 +152,6 @@ export async function updateRelevanceScore(
     .where(eq(articles.slug, slug));
 }
 
-export async function articleExists(slug: string, sourceUrl?: string): Promise<boolean> {
-  const conditions = [eq(articles.slug, slug)];
-  if (sourceUrl) {
-    conditions.push(eq(articles.sourceUrl, sourceUrl));
-  }
-  const rows = await db
-    .select({ slug: articles.slug })
-    .from(articles)
-    .where(or(...conditions))
-    .limit(1);
-  return rows.length > 0;
-}
-
 export async function getArticleBySourceUrl(
   sourceUrl: string
 ): Promise<{ slug: string; title: string; sourceUrl: string } | null> {
@@ -253,7 +240,6 @@ export async function matchStories(): Promise<number> {
   // Each pass: for every ungrouped article, find its best match (preferring
   // articles already in a group) and assign it.  Multiple passes handle
   // transitive matches (A↔B, B↔C → all in one group).
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const result = await db.execute(sql`
       WITH best_match AS (
@@ -566,41 +552,6 @@ export async function getTrendingEntities(
     mentionCount: r.mention_count,
     previousRank: r.previous_rank,
   }));
-}
-
-export interface RecentArticle {
-  slug: string;
-  title: string;
-  summary: string;
-  content: string | null;
-  sourceDomain: string;
-}
-
-export async function getRecentArticlesForEntities(
-  entityIds: number[],
-  hours = 48
-): Promise<Map<number, RecentArticle[]>> {
-  if (entityIds.length === 0) return new Map();
-
-  const rows = await db.execute(sql`
-    SELECT ae.entity_id, a.slug, a.title, a.summary, a.content, a.source_domain
-    FROM article_entities ae
-    JOIN articles a ON ae.article_slug = a.slug
-    WHERE ae.entity_id IN (${sql.join(entityIds.map((id) => sql`${id}`), sql`, `)})
-      AND a.created_at >= NOW() - INTERVAL '1 hour' * ${hours}
-    ORDER BY ae.entity_id, a.created_at DESC
-  `);
-
-  const result = new Map<number, RecentArticle[]>();
-  for (const r of rows as unknown as Array<{ entity_id: number; slug: string; title: string; summary: string; content: string | null; source_domain: string }>) {
-    let list = result.get(r.entity_id);
-    if (!list) {
-      list = [];
-      result.set(r.entity_id, list);
-    }
-    list.push({ slug: r.slug, title: r.title, summary: r.summary, content: r.content, sourceDomain: r.source_domain });
-  }
-  return result;
 }
 
 export async function getAllEntities(options?: {

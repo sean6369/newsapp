@@ -4,39 +4,11 @@ import type { TLDRArticle, FeedType } from "./types";
 import {
   FEED_URLS,
   CNA_FEED_URL,
-  CNA_WORLD_FEED_URL,
-  CNA_ASIA_FEED_URL,
-  CNA_FINANCE_FEED_URL,
   ST_FEED_URL,
-  ST_WORLD_FEED_URL,
-  ST_ASIA_FEED_URL,
-  ST_BUSINESS_FEED_URL,
 } from "./types";
 import { extractSourceId } from "./articles";
 
 const parser = new RSSParser();
-
-/**
- * Extract the stable numeric article ID from a CNA URL.
- * CNA URLs end with a numeric ID that stays the same even when the
- * headline slug changes, e.g. /business/fox-buy-roku-deal-6184436
- * Returns null for non-CNA URLs or URLs without a numeric ID.
- */
-export function extractCNAArticleId(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (
-      u.hostname === "www.channelnewsasia.com" ||
-      u.hostname === "channelnewsasia.com"
-    ) {
-      const match = u.pathname.match(/-(\d{5,})$/);
-      if (match) return match[1];
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
 
 interface DigestInfo {
   url: string;

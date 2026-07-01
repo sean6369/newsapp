@@ -18,9 +18,11 @@ export function useSourceSwitcher(article: ArticleWithRelated) {
   // the state update must go through useLayoutEffect.
   const safeIndex = Math.min(sourceIndex, sources.length - 1);
   const prevLenRef = useRef(sources.length);
+  /* eslint-disable react-hooks/refs -- animation direction must be set during render before AnimatePresence reads it */
   if (sources.length < prevLenRef.current) {
     directionRef.current = -1; // slide backward toward primary
   }
+  /* eslint-enable react-hooks/refs */
   useLayoutEffect(() => {
     if (sources.length < prevLenRef.current) {
       setSourceIndex(0);

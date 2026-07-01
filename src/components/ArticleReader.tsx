@@ -50,21 +50,22 @@ function CodeBlock(props: ComponentPropsWithoutRef<"pre">) {
 
 const ALLOWED_EMBED_HOSTS = ["flo.uri.sh", "datawrapper.dwcdn.net"];
 
-function EmbedIframe({ width: _w, height: _h, style: _s, ...props }: ComponentPropsWithoutRef<"iframe">) {
+function EmbedIframe({ width: _w, height: _h, style: _s, ...props }: ComponentPropsWithoutRef<"iframe">) { // eslint-disable-line @typescript-eslint/no-unused-vars -- destructured to omit from props spread
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
   const src = props.src || "";
 
-  let host: string;
+  let isAllowed = false;
   try {
-    host = new URL(src).hostname;
-    if (!ALLOWED_EMBED_HOSTS.includes(host)) return null;
+    const host = new URL(src).hostname;
+    isAllowed = ALLOWED_EMBED_HOSTS.includes(host);
   } catch {
-    return null;
+    // invalid URL
   }
 
   // Listen for postMessage resize events from Datawrapper and Flourish
   useEffect(() => {
+    if (!isAllowed) return;
     const handleMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
 
@@ -88,7 +89,9 @@ function EmbedIframe({ width: _w, height: _h, style: _s, ...props }: ComponentPr
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [isAllowed]);
+
+  if (!isAllowed) return null;
 
   return (
     <iframe

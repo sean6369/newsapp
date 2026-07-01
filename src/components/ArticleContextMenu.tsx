@@ -25,6 +25,7 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
   const [menu, setMenu] = useState<{ x: number; y: number; origin: string } | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
+  const [modalInfo, setModalInfo] = useState({ slug, sourceUrl, sourceDomain, title });
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -96,11 +97,13 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
 
   const handleShare = () => {
     close();
+    setModalInfo({ slug: slugRef.current, sourceUrl: sourceUrlRef.current, sourceDomain: sourceDomainRef.current, title: titleRef.current });
     setShareOpen(true);
   };
 
   const handleDownload = () => {
     close();
+    setModalInfo({ slug: slugRef.current, sourceUrl: sourceUrlRef.current, sourceDomain: sourceDomainRef.current, title: titleRef.current });
     setDownloadOpen(true);
   };
 
@@ -122,6 +125,7 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
 
   return (
     <div className="relative" onContextMenu={handleContextMenu}>
+      {/* eslint-disable-next-line react-hooks/refs -- setActiveSlug is a callback passed as a prop, not a ref read */}
       {children(menuTrigger, setActiveSlug)}
       {createPortal(
         <AnimatePresence>
@@ -181,18 +185,18 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
                 </Modal.Header>
                 <Modal.Body className="flex flex-col gap-1">
                   <button
-                    onClick={() => { setShareOpen(false); shareViaTelegram(sourceUrlRef.current, titleRef.current); }}
+                    onClick={() => { setShareOpen(false); shareViaTelegram(modalInfo.sourceUrl, modalInfo.title); }}
                     className="text-left text-sm px-3 py-2 rounded-md hover:bg-border/50 transition-colors text-foreground"
                   >
                     Original link
-                    <span className="block text-xs text-muted truncate">{sourceDomainRef.current}</span>
+                    <span className="block text-xs text-muted truncate">{modalInfo.sourceDomain}</span>
                   </button>
                   <button
-                    onClick={() => { setShareOpen(false); shareViaTelegram(`${window.location.origin}/article/${slugRef.current}`, titleRef.current); }}
+                    onClick={() => { setShareOpen(false); shareViaTelegram(`${window.location.origin}/article/${modalInfo.slug}`, modalInfo.title); }}
                     className="text-left text-sm px-3 py-2 rounded-md hover:bg-border/50 transition-colors text-foreground"
                   >
                     Article link
-                    <span className="block text-xs text-muted truncate">{typeof window !== "undefined" ? `${window.location.origin}/article/${slugRef.current}` : ""}</span>
+                    <span className="block text-xs text-muted truncate">{typeof window !== "undefined" ? `${window.location.origin}/article/${modalInfo.slug}` : ""}</span>
                   </button>
                 </Modal.Body>
               </Modal.Dialog>
@@ -213,14 +217,14 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
                 </Modal.Header>
                 <Modal.Body className="flex flex-col gap-1">
                   <button
-                    onClick={() => { setDownloadOpen(false); window.open(`/api/markdown?slug=${slugRef.current}`, "_blank"); }}
+                    onClick={() => { setDownloadOpen(false); window.open(`/api/markdown?slug=${modalInfo.slug}`, "_blank"); }}
                     className="text-left text-sm px-3 py-2 rounded-md hover:bg-border/50 transition-colors text-foreground"
                   >
                     Markdown
                     <span className="block text-xs text-muted">.md file with metadata header</span>
                   </button>
                   <button
-                    onClick={() => { setDownloadOpen(false); window.open(`/api/pdf?slug=${slugRef.current}`, "_blank"); }}
+                    onClick={() => { setDownloadOpen(false); window.open(`/api/pdf?slug=${modalInfo.slug}`, "_blank"); }}
                     className="text-left text-sm px-3 py-2 rounded-md hover:bg-border/50 transition-colors text-foreground"
                   >
                     PDF

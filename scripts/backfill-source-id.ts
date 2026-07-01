@@ -1,4 +1,4 @@
-import { eq, isNull, sql } from "drizzle-orm";
+import { isNull, sql } from "drizzle-orm";
 import { db } from "../src/lib/db/index";
 import { articles } from "../src/lib/db/schema";
 import { extractSourceId } from "../src/lib/articles";
