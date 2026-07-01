@@ -1,8 +1,5 @@
 import { USER_INTERESTS } from "./interests";
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const GEMINI_MODEL = process.env.GEMINI_CHAT_MODEL || "gemini-2.5-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+import { GEMINI_API_KEY, geminiUrl } from "./gemini";
 
 export async function scoreArticle(article: {
   title: string;
@@ -32,7 +29,7 @@ Feed: ${article.feed}
 
 Respond with ONLY four integers separated by commas (e.g. "28,17,6,22"). No other text.`;
 
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(`${geminiUrl("generateContent")}?key=${GEMINI_API_KEY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

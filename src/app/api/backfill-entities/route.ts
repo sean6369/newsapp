@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getArticlesWithoutEntities, clearAllEntities } from "@/lib/db/queries";
 import { extractAndLinkForArticle } from "@/lib/extractor";
+import { LOG_TITLE_LEN } from "@/lib/api-utils";
 
 export async function POST(request: NextRequest) {
   const limit = parseInt(request.nextUrl.searchParams.get("limit") || "50", 10) || 50;
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest) {
       const success = await extractAndLinkForArticle(article.slug);
       if (success) {
         extracted++;
-        console.log(`[backfill-entities] ${article.title.slice(0, 60)} → done`);
+        console.log(`[backfill-entities] ${article.title.slice(0, LOG_TITLE_LEN)} → done`);
       } else {
         failed++;
       }

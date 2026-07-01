@@ -50,22 +50,17 @@ function sortArticles(list: ArticleWithRelated[], sort?: string): ArticleWithRel
   });
 }
 
-function filtersToParams(filters: ArticleFilters): string {
+function filtersToParams(filters: ArticleFilters, omitDefaults = true): string {
   const params = new URLSearchParams();
   if (filters.feed && filters.feed !== "all") params.set("feed", filters.feed);
   if (filters.date) params.set("date", filters.date);
   if (filters.search) params.set("search", filters.search);
-  if (filters.sort && filters.sort !== "relevance") params.set("sort", filters.sort);
+  if (filters.sort && (!omitDefaults || filters.sort !== "relevance")) params.set("sort", filters.sort);
   return params.toString();
 }
 
 function buildSwrKey(filters: ArticleFilters): string {
-  const params = new URLSearchParams();
-  if (filters.feed && filters.feed !== "all") params.set("feed", filters.feed);
-  if (filters.date) params.set("date", filters.date);
-  if (filters.search) params.set("search", filters.search);
-  if (filters.sort) params.set("sort", filters.sort);
-  return `/api/articles?${params.toString()}`;
+  return `/api/articles?${filtersToParams(filters, false)}`;
 }
 
 // Module-level: survives remounts (like hasFetchedOnce in Feed).

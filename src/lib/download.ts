@@ -1,27 +1,21 @@
 import type { Article } from "@/lib/types";
+import { buildArticleMarkdownHeader } from "@/lib/articles";
 
-export function downloadMarkdown(article: Article, content: string) {
-  const header = [
-    `# ${article.title}`,
-    "",
-    `- **Source:** [${article.sourceDomain}](${article.sourceUrl})`,
-    `- **Date:** ${article.date}`,
-    `- **Feed:** ${article.feed}`,
-    `- **Reading time:** ${article.readingTime} min`,
-    "",
-    "---",
-    "",
-  ].join("\n");
-
-  const blob = new Blob([header + content], { type: "text/markdown;charset=utf-8" });
+function downloadBlob(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${article.slug}.md`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+export function downloadMarkdown(article: Article, content: string) {
+  const header = buildArticleMarkdownHeader(article);
+  downloadBlob(header + content, `${article.slug}.md`);
 }
 
 export function downloadPdf(article: Article) {
@@ -62,13 +56,5 @@ export function downloadStorylineMarkdown(
     "",
   ].join("\n");
 
-  const blob = new Blob([header + fullStory + footer], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `storyline-${storylineId}.md`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  downloadBlob(header + fullStory + footer, `storyline-${storylineId}.md`);
 }

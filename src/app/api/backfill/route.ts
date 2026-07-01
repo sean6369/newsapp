@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUnscoredArticles, getAllArticlesForScoring, updateRelevanceScore } from "@/lib/db/queries";
 import { scoreArticle } from "@/lib/scorer";
+import { LOG_TITLE_LEN } from "@/lib/api-utils";
 
 export async function POST(request: NextRequest) {
   if (process.env.ENABLE_PIPELINE === "false") {
@@ -25,10 +26,10 @@ export async function POST(request: NextRequest) {
       await updateRelevanceScore(article.slug, score);
       if (score !== null) {
         scored++;
-        console.log(`[backfill] ${article.title.slice(0, 60)} → ${score}`);
+        console.log(`[backfill] ${article.title.slice(0, LOG_TITLE_LEN)} → ${score}`);
       } else {
         failed++;
-        console.log(`[backfill] ${article.title.slice(0, 60)} → failed`);
+        console.log(`[backfill] ${article.title.slice(0, LOG_TITLE_LEN)} → failed`);
       }
     } catch (error) {
       failed++;

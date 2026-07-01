@@ -78,3 +78,24 @@ export function buildArticle(
 
   return { article, content };
 }
+
+export function buildArticleMarkdownHeader(article: {
+  title: string;
+  sourceDomain: string;
+  sourceUrl: string;
+  date: string;
+  feed: string;
+  readingTime: number;
+}): string {
+  return [
+    `# ${article.title}`,
+    "",
+    `- **Source:** [${article.sourceDomain}](${article.sourceUrl})`,
+    `- **Date:** ${article.date}`,
+    `- **Feed:** ${article.feed}`,
+    `- **Reading time:** ${article.readingTime} min`,
+    "",
+    "---",
+    "",
+  ].join("\n");
+}

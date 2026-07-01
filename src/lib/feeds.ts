@@ -180,13 +180,31 @@ const CNA_SECTION_FILTERS: Record<string, string[]> = {
   finance: ["Business", "CNA Lifestyle"],
 };
 
-export async function fetchCNAArticles(
-  feedUrl: string = CNA_FEED_URL,
-  feed: TLDRArticle["feed"] = "singapore"
-): Promise<TLDRArticle[]> {
+// Standard URL-path → feed mappings shared by CNA and ST
+const FEED_PATH_MAPPINGS: Array<{ prefix: string; feed: TLDRArticle["feed"] }> = [
+  { prefix: "/business/", feed: "finance" },
+  { prefix: "/world/", feed: "world" },
+  { prefix: "/asia/", feed: "asia" },
+  { prefix: "/singapore/", feed: "singapore" },
+];
+
+interface RSSFeedOptions {
+  source: string;
+  feedUrl: string;
+  feed: TLDRArticle["feed"];
+  /** Extra URL path → feed mappings beyond the standard set */
+  extraPathMappings?: Array<{ prefix: string; feed: TLDRArticle["feed"] }>;
+  /** Extract category from RSS item (defaults to using defaultCategory) */
+  parseCategory?: (item: RSSParser.Item, defaultCategory: string) => string;
+  /** Transform raw summary text (e.g. strip HTML) */
+  transformSummary?: (raw: string) => string;
+}
+
+async function fetchRSSArticles(options: RSSFeedOptions): Promise<TLDRArticle[]> {
+  const { source, feedUrl, feed, extraPathMappings, parseCategory, transformSummary } = options;
   const articles: TLDRArticle[] = [];
-  const sectionFilters = CNA_SECTION_FILTERS[feed] || [];
   const defaultCategory = feed === "finance" ? "Business" : feed.charAt(0).toUpperCase() + feed.slice(1);
+  const allMappings = [...FEED_PATH_MAPPINGS, ...(extraPathMappings ?? [])];
 
   try {
     const rss = await parser.parseURL(feedUrl);
@@ -199,24 +217,22 @@ export async function fetchCNAArticles(
       const sgtDate = new Date(pubDate.getTime() + 8 * 60 * 60 * 1000);
       const date = sgtDate.toISOString().split("T")[0];
 
-      const summary =
-        item.contentSnippet || item.content || item.title;
+      const rawSummary = item.contentSnippet || item.content || item.title;
+      const summary = transformSummary ? transformSummary(rawSummary) : rawSummary;
 
-      // CNA categories come as comma-separated strings like "Business ,Singapore"
-      // Pick the first meaningful category (filter out the feed's own section name)
-      const rawCats = (item.categories?.[0] || defaultCategory)
-        .split(",")
-        .map((c: string) => c.trim())
-        .filter((c: string) => c && !sectionFilters.includes(c));
-      const category = rawCats[0] || defaultCategory;
+      const category = parseCategory
+        ? parseCategory(item, defaultCategory)
+        : defaultCategory;
 
-      // Infer feed from URL path — CNA's RSS feeds can include cross-section articles
+      // Infer feed from URL path — RSS feeds can include cross-section articles
       const urlPath = new URL(item.link).pathname;
       let resolvedFeed: TLDRArticle["feed"] = feed;
-      if (urlPath.startsWith("/business/")) resolvedFeed = "finance";
-      else if (urlPath.startsWith("/world/")) resolvedFeed = "world";
-      else if (urlPath.startsWith("/asia/") || urlPath.startsWith("/east-asia/")) resolvedFeed = "asia";
-      else if (urlPath.startsWith("/singapore/")) resolvedFeed = "singapore";
+      for (const mapping of allMappings) {
+        if (urlPath.startsWith(mapping.prefix)) {
+          resolvedFeed = mapping.feed;
+          break;
+        }
+      }
 
       articles.push({
         title: item.title.trim(),
@@ -230,61 +246,43 @@ export async function fetchCNAArticles(
       });
     }
 
-    console.log(`[feeds] Fetched ${articles.length} CNA ${feed} articles`);
+    console.log(`[feeds] Fetched ${articles.length} ${source} ${feed} articles`);
   } catch (error) {
-    console.error(`[feeds] Failed to fetch CNA ${feed} RSS:`, error);
+    console.error(`[feeds] Failed to fetch ${source} ${feed} RSS:`, error);
   }
 
   return articles;
 }
 
-export async function fetchSTArticles(
+export function fetchCNAArticles(
+  feedUrl: string = CNA_FEED_URL,
+  feed: TLDRArticle["feed"] = "singapore"
+): Promise<TLDRArticle[]> {
+  const sectionFilters = CNA_SECTION_FILTERS[feed] || [];
+  return fetchRSSArticles({
+    source: "CNA",
+    feedUrl,
+    feed,
+    extraPathMappings: [{ prefix: "/east-asia/", feed: "asia" }],
+    parseCategory: (item, defaultCategory) => {
+      const rawCats = (item.categories?.[0] || defaultCategory)
+        .split(",")
+        .map((c: string) => c.trim())
+        .filter((c: string) => c && !sectionFilters.includes(c));
+      return rawCats[0] || defaultCategory;
+    },
+  });
+}
+
+export function fetchSTArticles(
   feedUrl: string = ST_FEED_URL,
   feed: TLDRArticle["feed"] = "singapore"
 ): Promise<TLDRArticle[]> {
-  const articles: TLDRArticle[] = [];
-  const defaultCategory = feed === "finance" ? "Business" : feed.charAt(0).toUpperCase() + feed.slice(1);
-
-  try {
-    const rss = await parser.parseURL(feedUrl);
-
-    for (const item of rss.items) {
-      if (!item.link || !item.title) continue;
-
-      // Parse pubDate to YYYY-MM-DD in SGT (UTC+8)
-      const pubDate = item.pubDate ? new Date(item.pubDate) : new Date();
-      const sgtDate = new Date(pubDate.getTime() + 8 * 60 * 60 * 1000);
-      const date = sgtDate.toISOString().split("T")[0];
-
-      // Strip HTML from description
-      const rawSummary = item.contentSnippet || item.content || item.title;
-      const summary = rawSummary.replace(/<[^>]*>/g, "").trim();
-
-      // Infer feed from URL path — ST's RSS feeds can include cross-section articles
-      const urlPath = new URL(item.link).pathname;
-      let resolvedFeed: TLDRArticle["feed"] = feed;
-      if (urlPath.startsWith("/business/")) resolvedFeed = "finance";
-      else if (urlPath.startsWith("/world/")) resolvedFeed = "world";
-      else if (urlPath.startsWith("/asia/")) resolvedFeed = "asia";
-      else if (urlPath.startsWith("/singapore/")) resolvedFeed = "singapore";
-
-      articles.push({
-        title: item.title.trim(),
-        sourceUrl: item.link,
-        summary,
-        category: defaultCategory,
-        readingTime: 0,
-        feed: resolvedFeed,
-        date,
-        sourceId: extractSourceId(item.link),
-      });
-    }
-
-    console.log(`[feeds] Fetched ${articles.length} ST ${feed} articles`);
-  } catch (error) {
-    console.error(`[feeds] Failed to fetch ST ${feed} RSS:`, error);
-  }
-
-  return articles;
+  return fetchRSSArticles({
+    source: "ST",
+    feedUrl,
+    feed,
+    transformSummary: (raw) => raw.replace(/<[^>]*>/g, ""),
+  });
 }
 

@@ -11,9 +11,47 @@ import {
   insertStoryline,
 } from "./db/queries";
 import type { EntityType } from "./types";
+import { LOG_TITLE_LEN } from "./api-utils";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 const OPENAI_URL = "https://api.openai.com/v1/responses";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function parseOpenAIText(data: any): string | null {
+  return (
+    data.output
+      ?.filter((block: { type: string }) => block.type === "message")
+      ?.flatMap((block: { content: Array<{ type: string; text: string }> }) => block.content)
+      ?.find((part: { type: string }) => part.type === "output_text")?.text ?? null
+  );
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+async function callOpenAI(
+  body: Record<string, unknown>,
+  label: string
+): Promise<string | null> {
+  const response = await fetch(OPENAI_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    console.error(`[${label}] OpenAI API error ${response.status}: ${await response.text()}`);
+    return null;
+  }
+
+  const data = await response.json();
+  return parseOpenAIText(data);
+}
+
+const MAX_ENTITIES = 8;
+const MAX_TOPICS = 3;
+const MIN_SALIENCE = 0.45;
 
 const VALID_ENTITY_TYPES = new Set<EntityType>([
   "person",
@@ -45,7 +83,7 @@ async function extractEntitiesAndTopics(article: {
 
     const prompt = `Extract entities and assign topics from this news article.
 
-ENTITIES: Extract the 5-8 most prominent named entities. Only include entities central to the story — not tangential mentions.
+ENTITIES: Extract the 5-${MAX_ENTITIES} most prominent named entities. Only include entities central to the story — not tangential mentions.
 - Each entity must appear EXACTLY ONCE. Never return the same entity twice with different types.
 - For companies and platforms (e.g. TikTok, Google, Vinted), always use type "organization" — not "product". Only use "product" for specific product names that are not the company itself (e.g. "iPhone", "ChatGPT", "Windows 11").
 - Use the full canonical name with consistent casing (e.g. "Donald Trump" not "Trump", "Lawrence Wong" not "PM Wong", "Monetary Authority of Singapore" not "MAS", "NBCUniversal" not "NBC Universal")
@@ -53,21 +91,16 @@ ENTITIES: Extract the 5-8 most prominent named entities. Only include entities c
 - Use American English spelling for common suffixes (e.g. "Organization" not "Organisation")
 - Do NOT extract: news sources/wire agencies (Reuters, CNA, Straits Times, AFP, Bloomberg), vague groups ("Chinese students", "analysts", "residents"), generic concepts ("artificial intelligence", "cyberattack", "social media"), or entities only mentioned in passing
 - type must be one of: person, organization, location, product
-- salience: 0.0 to 1.0 indicating how central this entity is (1.0 = article is primarily about this entity). Only include entities with salience >= 0.45.
+- salience: 0.0 to 1.0 indicating how central this entity is (1.0 = article is primarily about this entity). Only include entities with salience >= ${MIN_SALIENCE}.
 
-TOPICS: Assign 1-3 topics from this list ONLY:
+TOPICS: Assign 1-${MAX_TOPICS} topics from this list ONLY:
 ${TOPIC_TAXONOMY.map((t) => `- ${t}`).join("\n")}
 
 ARTICLE:
 ${articleText}`;
 
-    const response = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
+    const text = await callOpenAI(
+      {
         model: "gpt-5.4-mini",
         reasoning: { effort: "low" },
         input: [{ role: "user", content: prompt }],
@@ -105,19 +138,9 @@ ${articleText}`;
             },
           },
         },
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(`[extractor] OpenAI API error ${response.status}: ${await response.text()}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const text = data.output
-      ?.filter((block: { type: string }) => block.type === "message")
-      ?.flatMap((block: { content: Array<{ type: string; text: string }> }) => block.content)
-      ?.find((part: { type: string }) => part.type === "output_text")?.text;
+      },
+      "extractor"
+    );
 
     if (!text) {
       console.error("[extractor] No text in OpenAI response");
@@ -133,7 +156,7 @@ ${articleText}`;
         ...e,
         salience: Math.max(0, Math.min(1, e.salience)),
       }))
-      .filter((e) => e.salience >= 0.45);
+      .filter((e) => e.salience >= MIN_SALIENCE);
 
     // Normalize British → American spelling in entity names (only safe patterns)
     parsed.entities = parsed.entities.map((e) => ({
@@ -152,12 +175,12 @@ ${articleText}`;
         deduped.set(key, e);
       }
     }
-    parsed.entities = Array.from(deduped.values()).slice(0, 8);
+    parsed.entities = Array.from(deduped.values()).slice(0, MAX_ENTITIES);
 
     // Validate topics
     parsed.topics = parsed.topics
       .filter((t) => VALID_TOPICS.has(t))
-      .slice(0, 3);
+      .slice(0, MAX_TOPICS);
 
     return parsed;
   } catch (error) {
@@ -193,7 +216,7 @@ export async function extractAndLinkForArticle(slug: string): Promise<boolean> {
   }
 
   console.log(
-    `[extractor] ${article.title.slice(0, 50)} → ${result.entities.length} entities, ${result.topics.length} topics`
+    `[extractor] ${article.title.slice(0, LOG_TITLE_LEN)} → ${result.entities.length} entities, ${result.topics.length} topics`
   );
   return true;
 }
@@ -227,13 +250,8 @@ ARTICLES:
 ${articleList}`;
 
   try {
-    const response = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
+    const text = await callOpenAI(
+      {
         model: "gpt-5.4-mini",
         reasoning: { effort: "low" },
         input: [{ role: "user", content: prompt }],
@@ -267,19 +285,9 @@ ${articleList}`;
             },
           },
         },
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(`[storylines] OpenAI API error ${response.status}: ${await response.text()}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const text = data.output
-      ?.filter((block: { type: string }) => block.type === "message")
-      ?.flatMap((block: { content: Array<{ type: string; text: string }> }) => block.content)
-      ?.find((part: { type: string }) => part.type === "output_text")?.text;
+      },
+      "storylines"
+    );
 
     if (!text) return null;
 
@@ -320,28 +328,13 @@ SOURCE ARTICLES:
 ${articleText}`;
 
   try {
-    const response = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
+    const text = await callOpenAI(
+      {
         model: "gpt-5.4-mini",
         input: [{ role: "user", content: prompt }],
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(`[storylines] Full story API error ${response.status}: ${await response.text()}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const text = data.output
-      ?.filter((block: { type: string }) => block.type === "message")
-      ?.flatMap((block: { content: Array<{ type: string; text: string }> }) => block.content)
-      ?.find((part: { type: string }) => part.type === "output_text")?.text;
+      },
+      "storylines"
+    );
 
     return text || null;
   } catch (error) {

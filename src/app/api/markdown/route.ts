@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getArticleBySlug, getArticleContent } from "@/lib/db/queries";
+import { buildArticleMarkdownHeader } from "@/lib/articles";
 
 export async function GET(request: NextRequest) {
   const slug = request.nextUrl.searchParams.get("slug");
@@ -13,18 +14,7 @@ export async function GET(request: NextRequest) {
   }
 
   const content = (await getArticleContent(slug)) ?? article.summary;
-
-  const header = [
-    `# ${article.title}`,
-    "",
-    `- **Source:** [${article.sourceDomain}](${article.sourceUrl})`,
-    `- **Date:** ${article.date}`,
-    `- **Feed:** ${article.feed}`,
-    `- **Reading time:** ${article.readingTime} min`,
-    "",
-    "---",
-    "",
-  ].join("\n");
+  const header = buildArticleMarkdownHeader(article);
 
   return new NextResponse(header + content, {
     headers: {
