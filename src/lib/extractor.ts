@@ -12,9 +12,7 @@ import {
 } from "./db/queries";
 import type { EntityType } from "./types";
 import { LOG_TITLE_LEN } from "./api-utils";
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
-const OPENAI_URL = "https://api.openai.com/v1/responses";
+import { OPENAI_API_KEY, OPENAI_URL } from "./openai";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function parseOpenAIText(data: any): string | null {

@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getArticleBySlug, getArticleContent, getStorylineById } from "@/lib/db/queries";
 import { buildSystemPrompt, buildStorylineSystemPrompt } from "@/lib/chat";
-import { GEMINI_API_KEY, geminiUrl } from "@/lib/gemini";
+import { OPENAI_API_KEY, OPENAI_URL, OPENAI_CHAT_MODEL } from "@/lib/openai";
 import type { SearchSource } from "@/lib/types";
-
-const GEMINI_URL = geminiUrl("streamGenerateContent");
 
 export async function POST(request: NextRequest) {
   const { slug, storylineId, messages } = await request.json();
@@ -30,86 +28,46 @@ export async function POST(request: NextRequest) {
     systemPrompt = buildSystemPrompt(markdown, article);
   }
 
-  // Convert messages to Gemini format ("model" instead of "assistant")
-  const contents = messages.map((m: { role: string; content: string }) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
+  const input = [
+    { role: "system", content: systemPrompt },
+    ...messages.map((m: { role: string; content: string }) => ({
+      role: m.role,
+      content: m.content,
+    })),
+  ];
 
   const encoder = new TextEncoder();
 
   const readableStream = new ReadableStream({
     async start(controller) {
       try {
-        const response = await fetch(GEMINI_URL, {
+        const response = await fetch(OPENAI_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY,
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
           },
           body: JSON.stringify({
-            contents,
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            tools: [{ google_search: {} }],
-            generationConfig: { maxOutputTokens: 16384 },
+            model: OPENAI_CHAT_MODEL,
+            stream: true,
+            input,
+            tools: [{ type: "web_search_preview" }],
+            reasoning: { effort: "medium" },
           }),
         });
 
         if (!response.ok) {
           const errorBody = await response.text();
-          throw new Error(`Gemini API error ${response.status}: ${errorBody}`);
+          throw new Error(`OpenAI API error ${response.status}: ${errorBody}`);
         }
 
         const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body from Gemini");
+        if (!reader) throw new Error("No response body from OpenAI");
 
         const decoder = new TextDecoder();
         let buffer = "";
+        let eventType = "";
         const sources = new Map<string, SearchSource>();
-
-        const processLine = (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) return;
-
-          const data = trimmed.slice(6);
-          if (!data) return;
-
-          try {
-            const parsed = JSON.parse(data);
-            const candidate = parsed.candidates?.[0];
-            if (!candidate) return;
-
-            // Extract grounding sources
-            const groundingChunks =
-              candidate.groundingMetadata?.groundingChunks;
-            if (groundingChunks) {
-              for (const chunk of groundingChunks) {
-                if (chunk.web?.uri) {
-                  sources.set(chunk.web.uri, {
-                    title: chunk.web.title || chunk.web.uri,
-                    url: chunk.web.uri,
-                  });
-                }
-              }
-            }
-
-            // Stream text (skip thinking parts)
-            const parts = candidate.content?.parts;
-            if (parts) {
-              for (const part of parts) {
-                if (part.text && !part.thought) {
-                  controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ text: part.text })}\n\n`
-                    )
-                  );
-                }
-              }
-            }
-          } catch {
-            // Skip malformed JSON
-          }
-        };
 
         while (true) {
           const { done, value } = await reader.read();
@@ -120,13 +78,49 @@ export async function POST(request: NextRequest) {
           buffer = lines.pop() || "";
 
           for (const line of lines) {
-            processLine(line);
-          }
-        }
+            const trimmed = line.trim();
+            if (!trimmed) {
+              eventType = "";
+              continue;
+            }
 
-        // Process any remaining data in the buffer (final chunk)
-        if (buffer.trim()) {
-          processLine(buffer);
+            if (trimmed.startsWith("event: ")) {
+              eventType = trimmed.slice(7);
+              continue;
+            }
+
+            if (!trimmed.startsWith("data: ")) continue;
+            const data = trimmed.slice(6);
+            if (!data) continue;
+
+            try {
+              const parsed = JSON.parse(data);
+
+              if (
+                eventType === "response.web_search_call.in_progress" ||
+                eventType === "response.web_search_call.searching"
+              ) {
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ searching: true })}\n\n`)
+                );
+              } else if (eventType === "response.output_text.delta" && parsed.delta) {
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ text: parsed.delta })}\n\n`)
+                );
+              } else if (
+                eventType === "response.output_text.annotation.added" &&
+                parsed.annotation?.type === "url_citation" &&
+                parsed.annotation.url
+              ) {
+                sources.set(parsed.annotation.url, {
+                  title: parsed.annotation.title || parsed.annotation.url,
+                  url: parsed.annotation.url,
+                });
+              }
+            } catch {
+              // Skip malformed JSON
+            }
+          }
         }
 
         // Send collected sources
