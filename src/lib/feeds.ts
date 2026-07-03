@@ -1,6 +1,6 @@
 import RSSParser from "rss-parser";
 import * as cheerio from "cheerio";
-import type { TLDRArticle, FeedType } from "./types";
+import type { RawArticle, FeedType } from "./types";
 import {
   FEED_URLS,
   CNA_FEED_URL,
@@ -16,70 +16,20 @@ interface DigestInfo {
   feed: FeedType;
 }
 
-export async function fetchDigestUrls(
-  targetDate?: string
-): Promise<DigestInfo[]> {
-  const results: DigestInfo[] = [];
-
-  for (const [feed, feedUrl] of Object.entries(FEED_URLS)) {
-    try {
-      const rss = await parser.parseURL(feedUrl);
-      let found = false;
-
-      for (const item of rss.items) {
-        if (!item.link) continue;
-
-        // Extract date from URL path: /tech/2026-06-11 or /ai/2026-06-11
-        const match = item.link.match(/\/(\d{4}-\d{2}-\d{2})$/);
-        if (!match) continue;
-
-        const date = match[1];
-        if (targetDate && date !== targetDate) continue;
-
-        results.push({
-          url: item.link,
-          date,
-          feed: feed as FeedType,
-        });
-        found = true;
-      }
-
-      // Fallback: if a target date was requested but not found in the RSS feed,
-      // construct the digest URL directly (TLDR pages stay up after RSS rotates)
-      if (targetDate && !found) {
-        const directUrl = `https://tldr.tech/${feed}/${targetDate}`;
-        console.log(`[feeds] RSS miss for ${feed}/${targetDate}, trying direct URL`);
-        results.push({
-          url: directUrl,
-          date: targetDate,
-          feed: feed as FeedType,
-        });
-      }
-    } catch (error) {
-      console.error(`[feeds] Failed to fetch RSS for ${feed}:`, error);
-
-      // If RSS fetch failed and we have a target date, try the direct URL
-      if (targetDate) {
-        const directUrl = `https://tldr.tech/${feed}/${targetDate}`;
-        console.log(`[feeds] RSS failed for ${feed}, trying direct URL for ${targetDate}`);
-        results.push({
-          url: directUrl,
-          date: targetDate,
-          feed: feed as FeedType,
-        });
-      }
-    }
-  }
-
-  return results;
+export function fetchDigestUrls(targetDate: string): DigestInfo[] {
+  return Object.keys(FEED_URLS).map((feed) => ({
+    url: `https://tldr.tech/${feed}/${targetDate}`,
+    date: targetDate,
+    feed: feed as FeedType,
+  }));
 }
 
 export async function scrapeDigestPage(
   url: string,
   feed: FeedType,
   date: string
-): Promise<TLDRArticle[]> {
-  const articles: TLDRArticle[] = [];
+): Promise<RawArticle[]> {
+  const articles: RawArticle[] = [];
 
   try {
     const response = await fetch(url, {
@@ -181,7 +131,7 @@ const CNA_SECTION_FILTERS: Record<string, string[]> = {
 };
 
 // Standard URL-path → feed mappings shared by CNA and ST
-const FEED_PATH_MAPPINGS: Array<{ prefix: string; feed: TLDRArticle["feed"] }> = [
+const FEED_PATH_MAPPINGS: Array<{ prefix: string; feed: FeedType }> = [
   { prefix: "/business/", feed: "finance" },
   { prefix: "/world/", feed: "world" },
   { prefix: "/asia/", feed: "asia" },
@@ -191,18 +141,18 @@ const FEED_PATH_MAPPINGS: Array<{ prefix: string; feed: TLDRArticle["feed"] }> =
 interface RSSFeedOptions {
   source: string;
   feedUrl: string;
-  feed: TLDRArticle["feed"];
+  feed: FeedType;
   /** Extra URL path → feed mappings beyond the standard set */
-  extraPathMappings?: Array<{ prefix: string; feed: TLDRArticle["feed"] }>;
+  extraPathMappings?: Array<{ prefix: string; feed: FeedType }>;
   /** Extract category from RSS item (defaults to using defaultCategory) */
   parseCategory?: (item: RSSParser.Item, defaultCategory: string) => string;
   /** Transform raw summary text (e.g. strip HTML) */
   transformSummary?: (raw: string) => string;
 }
 
-async function fetchRSSArticles(options: RSSFeedOptions): Promise<TLDRArticle[]> {
+async function fetchRSSArticles(options: RSSFeedOptions): Promise<RawArticle[]> {
   const { source, feedUrl, feed, extraPathMappings, parseCategory, transformSummary } = options;
-  const articles: TLDRArticle[] = [];
+  const articles: RawArticle[] = [];
   const defaultCategory = feed === "finance" ? "Business" : feed.charAt(0).toUpperCase() + feed.slice(1);
   const allMappings = [...FEED_PATH_MAPPINGS, ...(extraPathMappings ?? [])];
 
@@ -212,10 +162,9 @@ async function fetchRSSArticles(options: RSSFeedOptions): Promise<TLDRArticle[]>
     for (const item of rss.items) {
       if (!item.link || !item.title) continue;
 
-      // Parse pubDate to YYYY-MM-DD in SGT (UTC+8)
+      // Parse pubDate to YYYY-MM-DD in SGT
       const pubDate = item.pubDate ? new Date(item.pubDate) : new Date();
-      const sgtDate = new Date(pubDate.getTime() + 8 * 60 * 60 * 1000);
-      const date = sgtDate.toISOString().split("T")[0];
+      const date = pubDate.toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
 
       const rawSummary = item.contentSnippet || item.content || item.title;
       const summary = transformSummary ? transformSummary(rawSummary) : rawSummary;
@@ -226,7 +175,7 @@ async function fetchRSSArticles(options: RSSFeedOptions): Promise<TLDRArticle[]>
 
       // Infer feed from URL path — RSS feeds can include cross-section articles
       const urlPath = new URL(item.link).pathname;
-      let resolvedFeed: TLDRArticle["feed"] = feed;
+      let resolvedFeed: FeedType = feed;
       for (const mapping of allMappings) {
         if (urlPath.startsWith(mapping.prefix)) {
           resolvedFeed = mapping.feed;
@@ -256,8 +205,8 @@ async function fetchRSSArticles(options: RSSFeedOptions): Promise<TLDRArticle[]>
 
 export function fetchCNAArticles(
   feedUrl: string = CNA_FEED_URL,
-  feed: TLDRArticle["feed"] = "singapore"
-): Promise<TLDRArticle[]> {
+  feed: FeedType = "singapore"
+): Promise<RawArticle[]> {
   const sectionFilters = CNA_SECTION_FILTERS[feed] || [];
   return fetchRSSArticles({
     source: "CNA",
@@ -276,8 +225,8 @@ export function fetchCNAArticles(
 
 export function fetchSTArticles(
   feedUrl: string = ST_FEED_URL,
-  feed: TLDRArticle["feed"] = "singapore"
-): Promise<TLDRArticle[]> {
+  feed: FeedType = "singapore"
+): Promise<RawArticle[]> {
   return fetchRSSArticles({
     source: "ST",
     feedUrl,

@@ -1,4 +1,4 @@
-import { eq, desc, asc, ilike, or, and, sql, isNull } from "drizzle-orm";
+import { eq, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle-orm";
 import { db } from "./index";
 import { articles, entities, topics, articleEntities, articleTopics, storylines, storylineArticles } from "./schema";
 import type { Article, ArticleFilters, ArticleEntity, Topic, EntityType, EntitySortMode, EntityListItem } from "../types";
@@ -153,26 +153,40 @@ export async function updateRelevanceScore(
     .where(eq(articles.slug, slug));
 }
 
-export async function getArticleBySourceUrl(
-  sourceUrl: string
-): Promise<{ slug: string; title: string; sourceUrl: string } | null> {
-  const rows = await db
-    .select({ slug: articles.slug, title: articles.title, sourceUrl: articles.sourceUrl })
-    .from(articles)
-    .where(eq(articles.sourceUrl, sourceUrl))
-    .limit(1);
-  return rows[0] ?? null;
-}
+type ExistingArticleRow = { slug: string; title: string; sourceUrl: string };
 
-export async function getArticleBySourceId(
-  sourceId: string
-): Promise<{ slug: string; title: string; sourceUrl: string } | null> {
-  const rows = await db
-    .select({ slug: articles.slug, title: articles.title, sourceUrl: articles.sourceUrl })
-    .from(articles)
-    .where(eq(articles.sourceId, sourceId))
-    .limit(1);
-  return rows[0] ?? null;
+export async function getExistingArticles(
+  sourceIds: string[],
+  sourceUrls: string[]
+): Promise<{
+  bySourceId: Map<string, ExistingArticleRow>;
+  bySourceUrl: Map<string, ExistingArticleRow>;
+}> {
+  const cols = { slug: articles.slug, title: articles.title, sourceUrl: articles.sourceUrl, sourceId: articles.sourceId };
+  const bySourceId = new Map<string, ExistingArticleRow>();
+  const bySourceUrl = new Map<string, ExistingArticleRow>();
+
+  if (sourceIds.length === 0) return { bySourceId, bySourceUrl };
+
+  // Primary: batch lookup by sourceId
+  const byId = await db.select(cols).from(articles).where(inArray(articles.sourceId, sourceIds));
+  const matchedSourceIds = new Set<string>();
+  for (const r of byId) {
+    if (!r.sourceId) continue;
+    bySourceId.set(r.sourceId, r);
+    matchedSourceIds.add(r.sourceId);
+  }
+
+  // Fallback: batch lookup by sourceUrl for unmatched articles (pre-backfill rows)
+  const unmatchedUrls = sourceUrls.filter((_, i) => !matchedSourceIds.has(sourceIds[i]));
+  if (unmatchedUrls.length > 0) {
+    const byUrl = await db.select(cols).from(articles).where(inArray(articles.sourceUrl, unmatchedUrls));
+    for (const r of byUrl) {
+      bySourceUrl.set(r.sourceUrl, r);
+    }
+  }
+
+  return { bySourceId, bySourceUrl };
 }
 
 export async function updateArticleMetadata(
@@ -355,13 +369,16 @@ export async function findOrCreateEntity(
     .onConflictDoNothing()
     .returning({ id: entities.id });
 
-  // Race condition: another concurrent insert won
+  // Race condition: another concurrent insert won — re-query
   if (inserted.length === 0) {
     const retry = await db
       .select({ id: entities.id })
       .from(entities)
       .where(and(eq(entities.name, name), eq(entities.type, type)))
       .limit(1);
+    if (retry.length === 0) {
+      throw new Error(`[entities] Failed to find or create entity: ${name} (${type})`);
+    }
     return retry[0].id;
   }
 

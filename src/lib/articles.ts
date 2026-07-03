@@ -1,5 +1,5 @@
 import slugify from "slugify";
-import type { TLDRArticle, Article } from "./types";
+import type { RawArticle, Article } from "./types";
 
 export function extractDomain(url: string): string {
   try {
@@ -37,42 +37,42 @@ export function extractSourceId(url: string): string {
 }
 
 export function makeSlug(title: string, domain?: string, feed?: string): string {
-  const base = slugify(title, { lower: true, strict: true }).slice(0, 80);
+  const base = slugify(title, { lower: true, strict: true }).slice(0, 100);
   const parts = [base];
   if (feed) parts.push(feed);
   if (domain) parts.push(domain.replace(/\./g, "-"));
-  return parts.join("-").slice(0, 120);
+  return parts.join("-").slice(0, 150);
 }
 
 export function buildArticle(
-  tldrArticle: TLDRArticle,
+  rawArticle: RawArticle,
   clippedContent: string | null
 ): { article: Article; content: string } {
-  const domain = extractDomain(tldrArticle.sourceUrl);
-  const slug = makeSlug(tldrArticle.title, domain, tldrArticle.feed);
+  const domain = extractDomain(rawArticle.sourceUrl);
+  const slug = makeSlug(rawArticle.title, domain, rawArticle.feed);
 
-  const isHNDiscussion = tldrArticle.sourceUrl.includes("news.ycombinator.com/item");
+  const isHNDiscussion = rawArticle.sourceUrl.includes("news.ycombinator.com/item");
   const content = clippedContent
     ? clippedContent
     : isHNDiscussion
-      ? `[View discussion on Hacker News](${tldrArticle.sourceUrl})`
-      : `[Read the original article](${tldrArticle.sourceUrl})`;
+      ? `[View discussion on Hacker News](${rawArticle.sourceUrl})`
+      : `[Read the original article](${rawArticle.sourceUrl})`;
 
   const article: Article = {
     slug,
-    title: tldrArticle.title,
-    sourceUrl: tldrArticle.sourceUrl,
-    sourceDomain: extractDomain(tldrArticle.sourceUrl),
-    summary: tldrArticle.summary,
-    category: tldrArticle.category,
-    feed: tldrArticle.feed,
-    date: tldrArticle.date,
-    readingTime: tldrArticle.readingTime,
+    title: rawArticle.title,
+    sourceUrl: rawArticle.sourceUrl,
+    sourceDomain: extractDomain(rawArticle.sourceUrl),
+    summary: rawArticle.summary,
+    category: rawArticle.category,
+    feed: rawArticle.feed,
+    date: rawArticle.date,
+    readingTime: rawArticle.readingTime,
     clipped: clippedContent !== null,
     relevanceScore: null,
     storyGroup: null,
     createdAt: new Date().toISOString(),
-    sourceId: tldrArticle.sourceId,
+    sourceId: rawArticle.sourceId,
     updatedAt: null,
   };
 

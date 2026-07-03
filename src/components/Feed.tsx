@@ -136,7 +136,7 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
       />
 
       {lastFetchTime && (
-        <p className="text-right text-xs text-default-400 mt-6">
+        <p className="text-right text-xs text-muted mt-6">
           Last fetched: {new Date(lastFetchTime).toLocaleString()}
         </p>
       )}

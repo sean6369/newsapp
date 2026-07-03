@@ -10,11 +10,11 @@ import {
 } from "./types";
 import { clipArticle } from "./clipper";
 import { buildArticle } from "./articles";
-import { insertArticle, getArticleBySourceId, getArticleBySourceUrl, updateArticleMetadata, matchStories } from "./db/queries";
+import { insertArticle, getExistingArticles, updateArticleMetadata, matchStories } from "./db/queries";
 import { scoreArticle } from "./scorer";
 import { extractAndLinkForArticle } from "./extractor";
 import { extractDomain, makeSlug } from "./articles";
-import type { TLDRArticle, PipelineResult } from "./types";
+import type { RawArticle, PipelineResult } from "./types";
 
 const MAX_CONCURRENT = 3;
 const DELAY_BETWEEN_BATCHES_MS = 500;
@@ -54,19 +54,10 @@ export async function runFetchPipeline(options?: {
   const targetDate = options?.date || format(new Date(), "yyyy-MM-dd");
   console.log(`[pipeline] Starting fetch for ${targetDate}`);
 
-  // 1. Fetch RSS and get digest URLs
-  const digests = await fetchDigestUrls(targetDate);
-  console.log(`[pipeline] Found ${digests.length} digest(s) for ${targetDate}`);
-
-  // 2. Scrape each digest page
-  const allArticles: TLDRArticle[] = [];
-  for (const digest of digests) {
-    const articles = await scrapeDigestPage(digest.url, digest.feed, digest.date);
-    allArticles.push(...articles);
-  }
-
-  // 3. Fetch news feeds (CNA + ST across all sections)
-  const [cnaSG, cnaWorld, cnaAsia, cnaFinance, stSG, stWorld, stAsia, stFinance] = await Promise.all([
+  // 1. Fetch all sources in parallel (TLDR scrapes + CNA/ST RSS)
+  const digests = fetchDigestUrls(targetDate);
+  const [tldrResults, cnaSG, cnaWorld, cnaAsia, cnaFinance, stSG, stWorld, stAsia, stFinance] = await Promise.all([
+    Promise.all(digests.map((d) => scrapeDigestPage(d.url, d.feed, d.date))),
     fetchCNAArticles(),
     fetchCNAArticles(CNA_WORLD_FEED_URL, "world"),
     fetchCNAArticles(CNA_ASIA_FEED_URL, "asia"),
@@ -76,12 +67,16 @@ export async function runFetchPipeline(options?: {
     fetchSTArticles(ST_ASIA_FEED_URL, "asia"),
     fetchSTArticles(ST_BUSINESS_FEED_URL, "finance"),
   ]);
-  allArticles.push(...cnaSG, ...cnaWorld, ...cnaAsia, ...cnaFinance, ...stSG, ...stWorld, ...stAsia, ...stFinance);
+  const allArticles: RawArticle[] = [
+    ...tldrResults.flat(),
+    ...cnaSG, ...cnaWorld, ...cnaAsia, ...cnaFinance,
+    ...stSG, ...stWorld, ...stAsia, ...stFinance,
+  ];
   console.log(
-    `[pipeline] CNA: ${cnaSG.length} SG, ${cnaWorld.length} world, ${cnaAsia.length} asia, ${cnaFinance.length} finance | ST: ${stSG.length} SG, ${stWorld.length} world, ${stAsia.length} asia, ${stFinance.length} finance`
+    `[pipeline] TLDR: ${tldrResults.flat().length} | CNA: ${cnaSG.length} SG, ${cnaWorld.length} world, ${cnaAsia.length} asia, ${cnaFinance.length} finance | ST: ${stSG.length} SG, ${stWorld.length} world, ${stAsia.length} asia, ${stFinance.length} finance`
   );
 
-  // 4. Deduplicate within batch by sourceId
+  // 2. Deduplicate within batch and against database
   const seen = new Set<string>();
   const unique = allArticles.filter((a) => {
     if (seen.has(a.sourceId)) return false;
@@ -89,18 +84,19 @@ export async function runFetchPipeline(options?: {
     return true;
   });
 
-  console.log(
-    `[pipeline] ${unique.length} unique articles (${allArticles.length} total, ${allArticles.length - unique.length} duplicates)`
+  const { bySourceId, bySourceUrl } = await getExistingArticles(
+    unique.map((a) => a.sourceId),
+    unique.map((a) => a.sourceUrl)
   );
 
-  // 5. Deduplicate against database, update metadata for existing articles
-  const newArticles: TLDRArticle[] = [];
+  console.log(
+    `[pipeline] ${unique.length} unique articles (${allArticles.length - unique.length} in-batch dupes, ${bySourceId.size + bySourceUrl.size} already in DB)`
+  );
+
+  const newArticles: RawArticle[] = [];
   let metadataUpdates = 0;
   for (const a of unique) {
-    // Match order: sourceId (primary, indexed) → exact sourceUrl (fallback for pre-backfill rows)
-    const existing =
-      (await getArticleBySourceId(a.sourceId)) ??
-      (await getArticleBySourceUrl(a.sourceUrl));
+    const existing = bySourceId.get(a.sourceId) ?? bySourceUrl.get(a.sourceUrl);
 
     if (existing) {
       const titleChanged = existing.title !== a.title;
@@ -157,9 +153,9 @@ export async function runFetchPipeline(options?: {
   if (newArticles.length > 0) {
     console.log(`[pipeline] Processing ${newArticles.length} new articles...`);
 
-    // 6. Clip and insert to database
-    await processInBatches(newArticles, MAX_CONCURRENT, async (tldrArticle) => {
-      const clipped = await clipArticle(tldrArticle.sourceUrl);
+    // 3. Clip and insert to database
+    await processInBatches(newArticles, MAX_CONCURRENT, async (rawArticle) => {
+      const clipped = await clipArticle(rawArticle.sourceUrl);
 
       if (clipped) {
         result.clipped++;
@@ -167,8 +163,8 @@ export async function runFetchPipeline(options?: {
         result.failedClips++;
       }
 
-      const { article, content } = buildArticle(tldrArticle, clipped?.content || null);
-      article.relevanceScore = await scoreArticle(tldrArticle);
+      const { article, content } = buildArticle(rawArticle, clipped?.content || null);
+      article.relevanceScore = await scoreArticle(rawArticle);
       const inserted = await insertArticle(article, content);
 
       if (!inserted) {
@@ -179,10 +175,10 @@ export async function runFetchPipeline(options?: {
     console.log("[pipeline] No new articles to process");
   }
 
-  // 7. Match stories across sources (CNA ↔ ST) — runs after insertion so new articles are included
+  // 4. Match stories across sources (CNA ↔ ST) — runs after insertion so new articles are included
   await matchStories();
 
-  // 8. Extract entities and topics for newly inserted articles
+  // 5. Extract entities and topics for newly inserted articles
   if (newArticles.length > 0) {
     const slugsToExtract = newArticles.map((a) =>
       makeSlug(a.title, extractDomain(a.sourceUrl), a.feed)

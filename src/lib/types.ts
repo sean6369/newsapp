@@ -1,10 +1,12 @@
-export interface TLDRArticle {
+export type FeedType = "tech" | "ai" | "singapore" | "world" | "asia" | "finance";
+
+export interface RawArticle {
   title: string;
   sourceUrl: string;
   summary: string;
   category: string;
   readingTime: number;
-  feed: "tech" | "ai" | "singapore" | "world" | "asia" | "finance";
+  feed: FeedType;
   date: string;
   sourceId: string;
 }
@@ -16,7 +18,7 @@ export interface Article {
   sourceDomain: string;
   summary: string;
   category: string;
-  feed: "tech" | "ai" | "singapore" | "world" | "asia" | "finance";
+  feed: FeedType;
   date: string;
   readingTime: number;
   clipped: boolean;
@@ -44,7 +46,7 @@ export interface ChatMessage {
 }
 
 export interface ArticleFilters {
-  feed?: "tech" | "ai" | "singapore" | "world" | "asia" | "finance" | "all";
+  feed?: FeedType | "all";
   date?: string;
   search?: string;
   sort?: "date-desc" | "date-asc" | "relevance";
@@ -117,5 +119,3 @@ export const ST_ASIA_FEED_URL =
 
 export const ST_BUSINESS_FEED_URL =
   "https://www.straitstimes.com/news/business/rss.xml";
-
-export type FeedType = keyof typeof FEED_URLS;
