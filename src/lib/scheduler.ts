@@ -16,7 +16,9 @@ export function startScheduler() {
   fetchTask = cron.schedule("0 * * * *", async () => {
     console.log("[scheduler] Running hourly fetch pipeline...");
     try {
-      const result = await runFetchPipeline();
+      // No HTTP response to race, so run both phases inline.
+      const { result, finalize } = await runFetchPipeline();
+      await finalize();
       console.log("[scheduler] Pipeline complete:", result);
     } catch (error) {
       console.error("[scheduler] Pipeline failed:", error);

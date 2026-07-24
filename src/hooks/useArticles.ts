@@ -105,7 +105,7 @@ export function useArticles(): UseArticlesReturn {
   // SWR key uses debounced search to avoid fetching on every keystroke
   const swrKey = buildSwrKey({ ...filters, search: debouncedSearch });
 
-  const { data, error: swrError, isValidating, mutate } = useSWR<ArticlesData>(
+  const { data, error: swrError, isLoading, mutate } = useSWR<ArticlesData>(
     swrKey,
     fetcher,
     {
@@ -113,6 +113,21 @@ export function useArticles(): UseArticlesReturn {
       revalidateIfStale: false,
       revalidateOnReconnect: false,
       keepPreviousData: true,
+      // Poll while the current view has recently-added articles still awaiting a
+      // relevance score (filled in by the pipeline's deferred scoring pass) so
+      // they re-sort into place on their own, then return 0 to stop — an idle
+      // feed makes no background requests. Intentionally a fresh function each
+      // render (do NOT memoize): a new reference lets SWR's poll effect re-run
+      // and (re)start the loop when unscored articles arrive after a fetch — a
+      // stable ref would leave the loop dead. SWR also re-evaluates it every
+      // tick, so the recency cutoff stops polling even for a row that never scores.
+      refreshInterval: (latest: ArticlesData | undefined) => {
+        const cutoff = Date.now() - 10 * 60 * 1000;
+        const waiting = latest?.articles.some(
+          (a) => a.relevanceScore == null && new Date(a.createdAt).getTime() > cutoff
+        );
+        return waiting ? 60_000 : 0;
+      },
     }
   );
 
@@ -253,7 +268,7 @@ export function useArticles(): UseArticlesReturn {
     articles: data?.articles ?? [],
     dates: data?.dates ?? [],
     loading: !data,
-    fetching: isValidating && !!data,
+    fetching: isLoading && !!data,
     error: swrError ? (swrError instanceof Error ? swrError.message : "Unknown error") : null,
     filters,
     setFilters,

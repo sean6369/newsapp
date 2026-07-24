@@ -10,7 +10,7 @@ import {
 } from "./types";
 import { clipArticle } from "./clipper";
 import { buildArticle } from "./articles";
-import { insertArticle, getExistingArticles, updateArticleMetadata, matchStories } from "./db/queries";
+import { insertArticle, getExistingArticles, updateArticleMetadata, matchStories, updateRelevanceScore } from "./db/queries";
 import { scoreArticle } from "./scorer";
 import { extractAndLinkForArticle } from "./extractor";
 import { extractDomain, makeSlug } from "./articles";
@@ -48,9 +48,21 @@ async function processInBatches<T, R>(
   return results;
 }
 
+/**
+ * Runs the fetch pipeline in two phases:
+ *
+ * - **Phase 1 (awaited here):** fetch sources, dedup, clip + insert, and match
+ *   stories — everything needed for new articles to appear in the feed. The
+ *   returned `result` is complete once this resolves.
+ * - **Phase 2 (`finalize`):** relevance scoring (rate-limited) and entity
+ *   extraction. Returned as a continuation so the HTTP route can defer it past
+ *   the response via `after()` (keeping the request under Cloudflare's ~100s
+ *   limit so the feed's auto-refresh still fires), while the scheduler awaits
+ *   it inline.
+ */
 export async function runFetchPipeline(options?: {
   date?: string;
-}): Promise<PipelineResult> {
+}): Promise<{ result: PipelineResult; finalize: () => Promise<void> }> {
   const targetDate = options?.date || format(new Date(), "yyyy-MM-dd");
   console.log(`[pipeline] Starting fetch for ${targetDate}`);
 
@@ -90,7 +102,7 @@ export async function runFetchPipeline(options?: {
   );
 
   console.log(
-    `[pipeline] ${unique.length} unique articles (${allArticles.length - unique.length} in-batch dupes, ${bySourceId.size + bySourceUrl.size} already in DB)`
+    `[pipeline] ${unique.length} unique articles (${allArticles.length - unique.length} duplicates, ${bySourceId.size + bySourceUrl.size} skipped)`
   );
 
   const newArticles: RawArticle[] = [];
@@ -126,7 +138,7 @@ export async function runFetchPipeline(options?: {
           // Skip duplicate source_url conflicts (same article in multiple feeds)
           const pgCode = (err as { cause?: { code?: string } })?.cause?.code;
           if (pgCode === "23505") {
-            console.log(`[pipeline] Skipped metadata update for "${a.title}" (duplicate source_url)`);
+            console.log(`[pipeline] Skipped update for "${a.title}" (duplicate source_url)`);
           } else {
             throw err;
           }
@@ -150,11 +162,13 @@ export async function runFetchPipeline(options?: {
     skippedExisting: unique.length - newArticles.length,
   };
 
+  // 3. Clip and insert to database. Scoring is deferred to phase 2 so articles
+  //    appear in the app immediately instead of waiting on rate-limited Gemini calls.
+  let scoreTargets: { slug: string; raw: RawArticle }[] = [];
   if (newArticles.length > 0) {
     console.log(`[pipeline] Processing ${newArticles.length} new articles...`);
 
-    // 3. Clip and insert to database
-    await processInBatches(newArticles, MAX_CONCURRENT, async (rawArticle) => {
+    const inserted = await processInBatches(newArticles, MAX_CONCURRENT, async (rawArticle) => {
       const clipped = await clipArticle(rawArticle.sourceUrl);
 
       if (clipped) {
@@ -164,42 +178,69 @@ export async function runFetchPipeline(options?: {
       }
 
       const { article, content } = buildArticle(rawArticle, clipped?.content || null);
-      article.relevanceScore = await scoreArticle(rawArticle);
-      const inserted = await insertArticle(article, content);
+      const insertedOk = await insertArticle(article, content);
 
-      if (!inserted) {
-        console.log(`[pipeline] Skipped duplicate slug "${article.slug}"`);
+      if (!insertedOk) {
+        console.log(`[pipeline] Duplicate slug "${article.slug}"`);
+        return null;
       }
+      return { slug: article.slug, raw: rawArticle };
     });
+
+    scoreTargets = inserted.filter(
+      (t): t is { slug: string; raw: RawArticle } => t !== null
+    );
   } else {
     console.log("[pipeline] No new articles to process");
   }
 
-  // 4. Match stories across sources (CNA ↔ ST) — runs after insertion so new articles are included
+  // 4. Match stories across sources (CNA ↔ ST). Kept in phase 1 — it's a single
+  //    fast SQL query with no external API, so grouping is done before the
+  //    response and is visible as soon as new articles slide in.
   await matchStories();
 
-  // 5. Extract entities and topics for newly inserted articles
-  if (newArticles.length > 0) {
-    const slugsToExtract = newArticles.map((a) =>
-      makeSlug(a.title, extractDomain(a.sourceUrl), a.feed)
+  // Phase 2: relevance scoring + entity extraction. Deferred so the caller can
+  // run it after sending the response (HTTP route) or inline (scheduler).
+  const finalize = async () => {
+    // Score inserted articles in a throttled pass. scoreArticle self-limits to
+    // the Gemini free-tier quota (15 req/min); failures leave relevance_score
+    // null (set at insert) for the next backfill run to retry.
+    if (scoreTargets.length > 0) {
+      console.log(`[pipeline] Scoring ${scoreTargets.length} articles...`);
+      let scored = 0;
+      await processInBatches(scoreTargets, MAX_CONCURRENT, async ({ slug, raw }) => {
+        const score = await scoreArticle(raw);
+        if (score !== null) {
+          await updateRelevanceScore(slug, score);
+          scored++;
+        }
+      });
+      console.log(`[pipeline] Scored ${scored}/${scoreTargets.length} articles`);
+    }
+
+    // Extract entities and topics for newly inserted articles.
+    if (newArticles.length > 0) {
+      const slugsToExtract = newArticles.map((a) =>
+        makeSlug(a.title, extractDomain(a.sourceUrl), a.feed)
+      );
+
+      console.log(`[pipeline] Extracting entities/topics for ${slugsToExtract.length} articles...`);
+      let extracted = 0;
+      await processInBatches(slugsToExtract, MAX_CONCURRENT, async (slug) => {
+        try {
+          const success = await extractAndLinkForArticle(slug);
+          if (success) extracted++;
+        } catch (err) {
+          console.error(`[pipeline] Extraction failed for ${slug}:`, err);
+        }
+      });
+      console.log(`[pipeline] Extracted entities/topics for ${extracted}/${slugsToExtract.length} articles`);
+    }
+
+    console.log(
+      `[pipeline] Done: ${result.clipped} clipped, ${result.failedClips} failed, ${result.skippedExisting} skipped`
     );
+  };
 
-    console.log(`[pipeline] Extracting entities/topics for ${slugsToExtract.length} articles...`);
-    let extracted = 0;
-    await processInBatches(slugsToExtract, MAX_CONCURRENT, async (slug) => {
-      try {
-        const success = await extractAndLinkForArticle(slug);
-        if (success) extracted++;
-      } catch (err) {
-        console.error(`[pipeline] Extraction failed for ${slug}:`, err);
-      }
-    });
-    console.log(`[pipeline] Extracted entities/topics for ${extracted}/${slugsToExtract.length} articles`);
-  }
-
-  console.log(
-    `[pipeline] Done: ${result.clipped} clipped, ${result.failedClips} failed, ${result.skippedExisting} skipped`
-  );
-
-  return result;
+  return { result, finalize };
 }

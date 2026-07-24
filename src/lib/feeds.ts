@@ -17,11 +17,26 @@ interface DigestInfo {
 }
 
 export function fetchDigestUrls(targetDate: string): DigestInfo[] {
-  return Object.keys(FEED_URLS).map((feed) => ({
-    url: `https://tldr.tech/${feed}/${targetDate}`,
-    date: targetDate,
-    feed: feed as FeedType,
-  }));
+  // TLDR usually hasn't published "today's" digest yet when the hourly cron
+  // runs early in the day (the dated URL 307s to the undated feed page until
+  // then), so also re-check yesterday's date each run to self-heal once it
+  // does go up. Already-inserted articles are deduped by sourceId downstream.
+  const yesterday = new Date(targetDate);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yesterdayDate = yesterday.toISOString().split("T")[0];
+
+  return Object.keys(FEED_URLS).flatMap((feed) => [
+    {
+      url: `https://tldr.tech/${feed}/${targetDate}`,
+      date: targetDate,
+      feed: feed as FeedType,
+    },
+    {
+      url: `https://tldr.tech/${feed}/${yesterdayDate}`,
+      date: yesterdayDate,
+      feed: feed as FeedType,
+    },
+  ]);
 }
 
 export async function scrapeDigestPage(
@@ -41,6 +56,15 @@ export async function scrapeDigestPage(
 
     if (!response.ok) {
       console.error(`[feeds] Digest page returned ${response.status}: ${url}`);
+      return [];
+    }
+
+    // TLDR redirects the dated URL to the undated feed page (e.g. /tech)
+    // when that day's digest isn't published yet — that page has no
+    // <article> elements, so bail out with a clear log instead of silently
+    // parsing zero articles from the wrong page.
+    if (response.redirected && !new URL(response.url).pathname.endsWith(date)) {
+      console.log(`[feeds] Digest not yet published, skipping: ${url}`);
       return [];
     }
 

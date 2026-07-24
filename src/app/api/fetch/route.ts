@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { runFetchPipeline } from "@/lib/pipeline";
 
 export async function POST(request: NextRequest) {
@@ -9,7 +9,10 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
 
   try {
-    const result = await runFetchPipeline({ date: body.date });
+    const { result, finalize } = await runFetchPipeline({ date: body.date });
+    // Run scoring + extraction after the response is sent so the request stays
+    // under Cloudflare's ~100s limit and the feed's auto-refresh still fires.
+    after(finalize);
     return NextResponse.json(result);
   } catch (error) {
     console.error("[api/fetch] Pipeline error:", error);
