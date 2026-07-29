@@ -1,6 +1,6 @@
 import * as cron from "node-cron";
 import { runFetchPipeline } from "./pipeline";
-import { generateAndStoreStorylines } from "./extractor";
+import { generateAndStoreStorylines } from "./storylines";
 
 let fetchTask: ReturnType<typeof cron.schedule> | null = null;
 

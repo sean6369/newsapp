@@ -1,7 +1,8 @@
 import { eq, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle-orm";
 import { db } from "./index";
-import { articles, entities, topics, articleEntities, articleTopics, storylines, storylineArticles } from "./schema";
-import type { Article, ArticleFilters, ArticleEntity, Topic, EntityType, EntitySortMode, EntityListItem } from "../types";
+import { articles, storylines, storylineArticles } from "./schema";
+import type { Article, ArticleFilters, SearchFilters, SearchResponse, SearchResultArticle } from "../types";
+import { groupByStory } from "../group-stories";
 
 const articleColumns = {
   slug: articles.slug,
@@ -80,14 +81,16 @@ export async function queryArticles(
   if (filters.date) {
     conditions.push(eq(articles.date, filters.date));
   }
-  if (filters.search) {
-    const escaped = filters.search.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+  const search = filters.search?.trim();
+  if (search) {
+    // Same matching as /search: the GIN-indexed weighted tsvector, with
+    // websearch syntax ("phrases", -exclusions, or). The domain check is kept
+    // as a fallback so filtering by source ("straitstimes") still works —
+    // sourceDomain isn't part of search_vector.
     conditions.push(
       or(
-        ilike(articles.title, `%${escaped}%`),
-        ilike(articles.summary, `%${escaped}%`),
-        ilike(articles.content, `%${escaped}%`),
-        ilike(articles.sourceUrl, `%${escaped}%`)
+        sql`${articles.searchVector} @@ websearch_to_tsquery('english', ${search})`,
+        ilike(articles.sourceDomain, `%${search.replace(/[\\%_]/g, "\\$&")}%`)
       )
     );
   }
@@ -248,6 +251,204 @@ function rowToArticle(row: {
   };
 }
 
+// ── Full-text search ──────────────────────────────────────────────────
+
+/**
+ * Raw markdown is stored in `articles.content`, so strip link syntax and
+ * inline markers before ts_headline sees it — otherwise snippets come back
+ * full of `[text](url)`. Also collapses whitespace so fragments stay on one line.
+ */
+const MD_LINK_RE = "!?\\[([^\\]]*)\\]\\([^)]*\\)";
+const MD_MARKS_RE = "[#*_>`]";
+
+const snippetSource = sql`
+  regexp_replace(
+    regexp_replace(
+      regexp_replace(coalesce(a.content, a.summary), ${MD_LINK_RE}, '\\1', 'g'),
+      ${MD_MARKS_RE}, '', 'g'
+    ),
+    '\\s+', ' ', 'g'
+  )
+`;
+
+const HEADLINE_OPTIONS =
+  'StartSel=[[HL]], StopSel=[[/HL]], MaxWords=30, MinWords=12, MaxFragments=2, FragmentDelimiter=" … "';
+
+/** `HighlightAll` returns the whole title with matches marked, rather than an excerpt. */
+const TITLE_HEADLINE_OPTIONS =
+  "StartSel=[[HL]], StopSel=[[/HL]], HighlightAll=true";
+
+const searchColumns = sql`
+  a.slug, a.title, a.source_url, a.source_domain, a.summary, a.category,
+  a.feed, a.date, a.reading_time, a.clipped, a.relevance_score,
+  a.story_group, a.created_at, a.source_id, a.updated_at
+`;
+
+type SearchRow = {
+  slug: string;
+  title: string;
+  source_url: string;
+  source_domain: string;
+  summary: string;
+  category: string;
+  feed: string;
+  date: string;
+  reading_time: number;
+  clipped: boolean;
+  relevance_score: number | null;
+  story_group: string | null;
+  created_at: string;
+  source_id: string | null;
+  updated_at: string | null;
+  rank: number;
+  snippet: string | null;
+  title_snippet: string | null;
+  full_count: number;
+};
+
+/**
+ * `db.execute` returns raw SQL timestamps as naive strings ("2026-06-30
+ * 17:37:36.8") rather than the Date objects drizzle's typed selects produce.
+ * Swapping the space for a "T" yields an offset-less ISO string, which JS
+ * parses as local time — matching how postgres-js decodes these columns
+ * elsewhere, so both code paths agree on the instant.
+ */
+function parseNaiveTimestamp(value: string): Date {
+  return new Date(value.replace(" ", "T"));
+}
+
+function searchRowToArticle(r: SearchRow): SearchResultArticle {
+  return {
+    ...rowToArticle({
+      slug: r.slug,
+      title: r.title,
+      sourceUrl: r.source_url,
+      sourceDomain: r.source_domain,
+      summary: r.summary,
+      category: r.category,
+      feed: r.feed,
+      date: r.date,
+      readingTime: r.reading_time,
+      clipped: r.clipped,
+      relevanceScore: r.relevance_score,
+      storyGroup: r.story_group,
+      createdAt: parseNaiveTimestamp(r.created_at),
+      sourceId: r.source_id,
+      updatedAt: r.updated_at ? parseNaiveTimestamp(r.updated_at) : null,
+    }),
+    rank: r.rank,
+    snippet: r.snippet,
+    titleHighlight: r.title_snippet,
+  };
+}
+
+/**
+ * Search every article, all dates, via the weighted `search_vector` GIN index.
+ *
+ * Accepts websearch syntax — `"quoted phrases"`, `-exclusions`, `or` — and
+ * ranks with ts_rank_cd so title hits beat body hits. When full-text finds
+ * nothing (typo, or a name the stemmer mangles) it retries with trigram word
+ * similarity against titles and reports `mode: "fuzzy"` so the UI can say so.
+ */
+export async function searchArticles(
+  filters: SearchFilters
+): Promise<SearchResponse> {
+  const { query, feed, from, to, sort = "relevance", limit = 40, offset = 0 } = filters;
+
+  const trimmed = query.trim();
+  if (!trimmed) return { results: [], total: 0, rowCount: 0, mode: "empty" };
+
+  const feedFilter = feed && feed !== "all" ? sql` AND a.feed = ${feed}` : sql``;
+  const fromFilter = from ? sql` AND a.date >= ${from}` : sql``;
+  const toFilter = to ? sql` AND a.date <= ${to}` : sql``;
+  const scopeFilter = sql`${feedFilter}${fromFilter}${toFilter}`;
+
+  const orderBy =
+    sort === "date-asc"
+      ? sql`ORDER BY a.date ASC, a.created_at ASC`
+      : sort === "date-desc"
+        ? sql`ORDER BY a.date DESC, a.created_at DESC`
+        : sql`ORDER BY rank DESC, a.date DESC, a.created_at DESC`;
+
+  const ftsRows = (await db.execute(sql`
+    WITH q AS (SELECT websearch_to_tsquery('english', ${trimmed}) AS tsq)
+    SELECT ${searchColumns},
+      ts_rank_cd(a.search_vector, q.tsq)::real AS rank,
+      ts_headline('english', ${snippetSource}, q.tsq, ${HEADLINE_OPTIONS}) AS snippet,
+      ts_headline('english', a.title, q.tsq, ${TITLE_HEADLINE_OPTIONS}) AS title_snippet,
+      COUNT(*) OVER ()::int AS full_count
+    FROM articles a CROSS JOIN q
+    WHERE a.search_vector @@ q.tsq${scopeFilter}
+    ${orderBy}
+    LIMIT ${limit} OFFSET ${offset}
+  `)) as unknown as SearchRow[];
+
+  if (ftsRows.length > 0) {
+    return {
+      results: groupByStory(ftsRows.map(searchRowToArticle), feed),
+      total: Number(ftsRows[0].full_count),
+      rowCount: ftsRows.length,
+      mode: "fts",
+    };
+  }
+
+  // Zero full-text rows has two very different causes, and only one of them
+  // means "try harder". Probe before falling back — this runs only on the
+  // no-results path, so the common case pays nothing.
+  const probe = (await db.execute(sql`
+    SELECT
+      numnode(websearch_to_tsquery('english', ${trimmed}))::int AS nodes,
+      EXISTS (
+        SELECT 1 FROM articles a
+        WHERE a.search_vector @@ websearch_to_tsquery('english', ${trimmed})${scopeFilter}
+      ) AS has_match
+  `)) as unknown as Array<{ nodes: number; has_match: boolean }>;
+
+  const empty: SearchResponse = { results: [], total: 0, rowCount: 0, mode: "empty" };
+
+  // The query reduced to nothing searchable — only stop words or punctuation
+  // ("the and of", "or", "-"). Fuzzy-matching that against titles returns pure
+  // noise, so treat it as no query rather than a failed one.
+  if ((probe[0]?.nodes ?? 0) === 0) return empty;
+
+  // Running off the end of the full-text results is not the same as the search
+  // finding nothing; falling back here would let "load more" append fuzzy
+  // matches to a query that has exact ones.
+  if (offset > 0 && probe[0]?.has_match) return empty;
+
+  // Nothing matched — fall back to typo-tolerant title matching. `<%` is word
+  // similarity (query vs. best-matching word run in the title), not whole-string
+  // similarity, so a short query still matches a long headline.
+  const fuzzyRows = (await db.execute(sql`
+    SELECT ${searchColumns},
+      word_similarity(${trimmed}, a.title)::real AS rank,
+      NULL::text AS snippet,
+      NULL::text AS title_snippet,
+      COUNT(*) OVER ()::int AS full_count
+    FROM articles a
+    WHERE ${trimmed} <% a.title${scopeFilter}
+    ${orderBy}
+    LIMIT ${limit} OFFSET ${offset}
+  `)) as unknown as SearchRow[];
+
+  if (fuzzyRows.length === 0) return { results: [], total: 0, rowCount: 0, mode: "empty" };
+
+  return {
+    results: groupByStory(fuzzyRows.map(searchRowToArticle), feed),
+    total: Number(fuzzyRows[0].full_count),
+    rowCount: fuzzyRows.length,
+    mode: "fuzzy",
+  };
+}
+
+/**
+ * How far back story matching looks. `articles.date` is text in `YYYY-MM-DD`,
+ * where lexicographic order matches chronological order, so comparing as text
+ * keeps `idx_articles_date` usable — casting the column to `date` per row would
+ * not.
+ */
+const RECENT_CUTOFF = sql`to_char(CURRENT_DATE - 3, 'YYYY-MM-DD')`;
+
 export async function matchStories(): Promise<number> {
   let totalMatched = 0;
 
@@ -272,7 +473,10 @@ export async function matchStories(): Promise<number> {
           AND similarity(a.title, b.title) >
             CASE WHEN a.source_domain = b.source_domain THEN 0.7 ELSE 0.5 END
         WHERE a.story_group IS NULL
-          AND a.date::date >= CURRENT_DATE - INTERVAL '3 days'
+          AND a.date >= ${RECENT_CUTOFF}
+          -- Implied by a.date = b.date, but stating it lets the planner bound
+          -- both sides with idx_articles_date instead of scanning all of b.
+          AND b.date >= ${RECENT_CUTOFF}
         ORDER BY a.slug,
           b.story_group IS NOT NULL DESC,
           similarity(a.title, b.title) DESC
@@ -316,7 +520,8 @@ export async function matchStories(): Promise<number> {
             CASE WHEN a.source_domain = b.source_domain THEN 0.7 ELSE 0.5 END
         WHERE a.story_group IS NOT NULL
           AND b.story_group IS NOT NULL
-          AND a.date::date >= CURRENT_DATE - INTERVAL '3 days'
+          AND a.date >= ${RECENT_CUTOFF}
+          AND b.date >= ${RECENT_CUTOFF}
         ORDER BY GREATEST(a.story_group, b.story_group)
       )
       UPDATE articles
@@ -345,305 +550,6 @@ export async function getArticlesByStoryGroup(storyGroup: string): Promise<Artic
     .from(articles)
     .where(eq(articles.storyGroup, storyGroup));
   return rows.map((r) => rowToArticle(r));
-}
-
-// ── Entity & Topic functions ──────────────────────────────────────────
-
-export async function findOrCreateEntity(
-  name: string,
-  type: EntityType
-): Promise<number> {
-  // 1. Exact match
-  const existing = await db
-    .select({ id: entities.id })
-    .from(entities)
-    .where(and(eq(entities.name, name), eq(entities.type, type)))
-    .limit(1);
-
-  if (existing.length > 0) return existing[0].id;
-
-  // 2. Insert new entity
-  const inserted = await db
-    .insert(entities)
-    .values({ name, type })
-    .onConflictDoNothing()
-    .returning({ id: entities.id });
-
-  // Race condition: another concurrent insert won — re-query
-  if (inserted.length === 0) {
-    const retry = await db
-      .select({ id: entities.id })
-      .from(entities)
-      .where(and(eq(entities.name, name), eq(entities.type, type)))
-      .limit(1);
-    if (retry.length === 0) {
-      throw new Error(`[entities] Failed to find or create entity: ${name} (${type})`);
-    }
-    return retry[0].id;
-  }
-
-  return inserted[0].id;
-}
-
-export async function linkArticleEntity(
-  articleSlug: string,
-  entityId: number,
-  salience: number
-): Promise<void> {
-  await db
-    .insert(articleEntities)
-    .values({ articleSlug, entityId, salience })
-    .onConflictDoNothing();
-}
-
-export async function linkArticleTopic(
-  articleSlug: string,
-  topicId: number
-): Promise<void> {
-  await db
-    .insert(articleTopics)
-    .values({ articleSlug, topicId })
-    .onConflictDoNothing();
-}
-
-export async function getTopicByName(
-  name: string
-): Promise<{ id: number } | null> {
-  const rows = await db
-    .select({ id: topics.id })
-    .from(topics)
-    .where(eq(topics.name, name))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-export async function seedTopics(topicNames: readonly string[]): Promise<void> {
-  for (const name of topicNames) {
-    await db.insert(topics).values({ name }).onConflictDoNothing();
-  }
-}
-
-export async function getEntitiesForArticle(
-  slug: string
-): Promise<ArticleEntity[]> {
-  const rows = await db
-    .select({
-      id: entities.id,
-      name: entities.name,
-      type: entities.type,
-      salience: articleEntities.salience,
-    })
-    .from(articleEntities)
-    .innerJoin(entities, eq(articleEntities.entityId, entities.id))
-    .where(eq(articleEntities.articleSlug, slug))
-    .orderBy(desc(articleEntities.salience));
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    type: r.type as EntityType,
-    salience: r.salience,
-  }));
-}
-
-export async function getTopicsForArticle(
-  slug: string
-): Promise<Topic[]> {
-  return db
-    .select({ id: topics.id, name: topics.name })
-    .from(articleTopics)
-    .innerJoin(topics, eq(articleTopics.topicId, topics.id))
-    .where(eq(articleTopics.articleSlug, slug));
-}
-
-export async function getEntityById(
-  id: number
-): Promise<{ id: number; name: string; type: EntityType } | null> {
-  const rows = await db
-    .select({ id: entities.id, name: entities.name, type: entities.type })
-    .from(entities)
-    .where(eq(entities.id, id))
-    .limit(1);
-  return rows[0]
-    ? { id: rows[0].id, name: rows[0].name, type: rows[0].type as EntityType }
-    : null;
-}
-
-export async function getArticlesForEntity(
-  entityId: number
-): Promise<Article[]> {
-  const rows = await db
-    .select(articleColumns)
-    .from(articles)
-    .innerJoin(articleEntities, eq(articles.slug, articleEntities.articleSlug))
-    .where(eq(articleEntities.entityId, entityId))
-    .orderBy(desc(articles.createdAt));
-  return rows.map((r) => rowToArticle(r));
-}
-
-export async function getArticlesWithoutEntities(
-  limit = 50,
-  date?: string
-): Promise<Array<{ slug: string; title: string; summary: string }>> {
-  const dateFilter = date ? sql` AND a.date = ${date}` : sql``;
-  const rows = await db.execute(sql`
-    SELECT a.slug, a.title, a.summary
-    FROM articles a
-    LEFT JOIN article_entities ae ON a.slug = ae.article_slug
-    WHERE ae.article_slug IS NULL${dateFilter}
-    ORDER BY a.created_at DESC
-    LIMIT ${limit}
-  `);
-  return rows as unknown as Array<{ slug: string; title: string; summary: string }>;
-}
-
-export async function clearAllEntities(): Promise<void> {
-  await db.execute(sql`TRUNCATE article_entities, article_topics, entities CASCADE`);
-}
-
-export async function getCoOccurringEntities(
-  entityId: number,
-  minSharedArticles = 2
-): Promise<Array<{ entityId: number; name: string; type: string; sharedCount: number }>> {
-  const rows = await db.execute(sql`
-    SELECT
-      e2.id AS entity_id,
-      e2.name,
-      e2.type,
-      COUNT(DISTINCT ae1.article_slug)::int AS shared_count
-    FROM article_entities ae1
-    JOIN article_entities ae2 ON ae1.article_slug = ae2.article_slug
-      AND ae1.entity_id <> ae2.entity_id
-    JOIN entities e2 ON ae2.entity_id = e2.id
-    WHERE ae1.entity_id = ${entityId}
-    GROUP BY e2.id, e2.name, e2.type
-    HAVING COUNT(DISTINCT ae1.article_slug) >= ${minSharedArticles}
-    ORDER BY shared_count DESC
-    LIMIT 10
-  `);
-  return (rows as unknown as Array<{ entity_id: number; name: string; type: string; shared_count: number }>).map((r) => ({
-    entityId: r.entity_id,
-    name: r.name,
-    type: r.type,
-    sharedCount: r.shared_count,
-  }));
-}
-
-export async function getTrendingEntities(
-  hours = 48,
-  limit = 20
-): Promise<Array<{ id: number; name: string; type: EntityType; score: number; mentionCount: number; previousRank: number | null }>> {
-  const previousHours = hours * 2;
-  const rows = await db.execute(sql`
-    WITH current_ranked AS (
-      SELECT e.id, e.name, e.type,
-        (AVG(ae.salience) * LN(COUNT(*) + 1))::real AS score,
-        COUNT(*)::int AS mention_count,
-        RANK() OVER (ORDER BY (AVG(ae.salience) * LN(COUNT(*) + 1)) DESC)::int AS rnk
-      FROM article_entities ae
-      JOIN entities e ON ae.entity_id = e.id
-      JOIN articles a ON ae.article_slug = a.slug
-      WHERE a.created_at >= NOW() - INTERVAL '1 hour' * ${hours}
-      GROUP BY e.id, e.name, e.type
-    ),
-    previous_ranked AS (
-      SELECT e.id,
-        RANK() OVER (ORDER BY (AVG(ae.salience) * LN(COUNT(*) + 1)) DESC)::int AS rnk
-      FROM article_entities ae
-      JOIN entities e ON ae.entity_id = e.id
-      JOIN articles a ON ae.article_slug = a.slug
-      WHERE a.created_at >= NOW() - INTERVAL '1 hour' * ${previousHours}
-        AND a.created_at < NOW() - INTERVAL '1 hour' * ${hours}
-      GROUP BY e.id
-    )
-    SELECT c.id, c.name, c.type, c.score, c.mention_count,
-      p.rnk AS previous_rank
-    FROM current_ranked c
-    LEFT JOIN previous_ranked p ON c.id = p.id
-    ORDER BY c.score DESC
-    LIMIT ${limit}
-  `);
-  return (rows as unknown as Array<{ id: number; name: string; type: string; score: number; mention_count: number; previous_rank: number | null }>).map((r) => ({
-    id: r.id,
-    name: r.name,
-    type: r.type as EntityType,
-    score: r.score,
-    mentionCount: r.mention_count,
-    previousRank: r.previous_rank,
-  }));
-}
-
-export async function getAllEntities(options?: {
-  type?: EntityType;
-  search?: string;
-  sort?: EntitySortMode;
-  limit?: number;
-  offset?: number;
-}): Promise<{ entities: EntityListItem[]; total: number }> {
-  const { type, search, sort = "trending", limit = 200, offset = 0 } = options ?? {};
-
-  const typeFilter = type ? sql` AND e.type = ${type}` : sql``;
-  const searchFilter = search ? sql` AND e.name ILIKE ${"%" + search + "%"}` : sql``;
-
-  const orderClause =
-    sort === "alphabetical"
-      ? sql`ORDER BY e.name ASC`
-      : sort === "mentions"
-        ? sql`ORDER BY mention_count DESC, e.name ASC`
-        : sort === "recent"
-          ? sql`ORDER BY last_seen_at DESC NULLS LAST, e.name ASC`
-          : sql`ORDER BY trending_score DESC, mention_count DESC`;
-
-  const rows = await db.execute(sql`
-    SELECT
-      e.id,
-      e.name,
-      e.type,
-      COUNT(ae.article_slug)::int AS mention_count,
-      COALESCE(COUNT(ae.article_slug) FILTER (WHERE a.created_at >= NOW() - INTERVAL '48 hours'), 0)::int AS trending_mention_count,
-      COALESCE(SUM(ae.salience), 0)::real AS total_salience,
-      (COALESCE(AVG(ae.salience) FILTER (WHERE a.created_at >= NOW() - INTERVAL '48 hours'), 0)
-        * LN(COALESCE(COUNT(ae.article_slug) FILTER (WHERE a.created_at >= NOW() - INTERVAL '48 hours'), 0) + 1))::real AS trending_score,
-      TO_CHAR(MAX(a.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_seen_at,
-      COUNT(*) OVER () AS full_count
-    FROM entities e
-    LEFT JOIN article_entities ae ON e.id = ae.entity_id
-    LEFT JOIN articles a ON ae.article_slug = a.slug
-    WHERE 1=1${typeFilter}${searchFilter}
-    GROUP BY e.id, e.name, e.type
-    HAVING COUNT(ae.article_slug) > 0
-    ${orderClause}
-    LIMIT ${limit}
-    OFFSET ${offset}
-  `);
-
-  type Row = {
-    id: number;
-    name: string;
-    type: string;
-    mention_count: number;
-    trending_mention_count: number;
-    total_salience: number;
-    trending_score: number;
-    last_seen_at: string | null;
-    full_count: number;
-  };
-
-  const typedRows = rows as unknown as Row[];
-  const total = typedRows.length > 0 ? Number(typedRows[0].full_count) : 0;
-
-  return {
-    entities: typedRows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      type: r.type as EntityType,
-      mentionCount: r.mention_count,
-      trendingMentionCount: r.trending_mention_count,
-      totalSalience: r.total_salience,
-      trendingScore: r.trending_score,
-      lastSeenAt: r.last_seen_at,
-    })),
-    total,
-  };
 }
 
 // ── Storyline functions ───────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -8,7 +9,18 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  customType,
 } from "drizzle-orm/pg-core";
+
+/**
+ * Postgres `tsvector`. Only ever written by the database (generated column), so
+ * the TS-side type is a plain string we never read directly.
+ */
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 export const articles = pgTable(
   "articles",
@@ -29,6 +41,11 @@ export const articles = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     sourceId: text("source_id"),
     updatedAt: timestamp("updated_at"),
+    // Weighted full-text index over the article. Title matches outrank summary
+    // matches, which outrank body matches, via ts_rank_cd's weight vector.
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql`setweight(to_tsvector('english', coalesce("title", '')), 'A') || setweight(to_tsvector('english', coalesce("summary", '')), 'B') || setweight(to_tsvector('english', coalesce("content", '')), 'C')`
+    ),
   },
   (t) => [
     index("idx_articles_date").on(t.date),
@@ -38,62 +55,12 @@ export const articles = pgTable(
     uniqueIndex("idx_articles_source_url").on(t.sourceUrl),
     index("idx_articles_story_group").on(t.storyGroup),
     uniqueIndex("idx_articles_source_id").on(t.sourceId),
-  ]
-);
-
-export const entities = pgTable(
-  "entities",
-  {
-    id: serial("id").primaryKey(),
-    name: text("name").notNull(),
-    type: text("type").notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (t) => [
-    uniqueIndex("idx_entities_name_type").on(t.name, t.type),
-    index("idx_entities_type").on(t.type),
-  ]
-);
-
-export const topics = pgTable(
-  "topics",
-  {
-    id: serial("id").primaryKey(),
-    name: text("name").notNull().unique(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  }
-);
-
-export const articleEntities = pgTable(
-  "article_entities",
-  {
-    articleSlug: text("article_slug")
-      .notNull()
-      .references(() => articles.slug, { onDelete: "cascade" }),
-    entityId: integer("entity_id")
-      .notNull()
-      .references(() => entities.id, { onDelete: "cascade" }),
-    salience: real("salience"),
-  },
-  (t) => [
-    uniqueIndex("idx_article_entities_pk").on(t.articleSlug, t.entityId),
-    index("idx_article_entities_entity").on(t.entityId),
-  ]
-);
-
-export const articleTopics = pgTable(
-  "article_topics",
-  {
-    articleSlug: text("article_slug")
-      .notNull()
-      .references(() => articles.slug, { onDelete: "cascade" }),
-    topicId: integer("topic_id")
-      .notNull()
-      .references(() => topics.id, { onDelete: "cascade" }),
-  },
-  (t) => [
-    uniqueIndex("idx_article_topics_pk").on(t.articleSlug, t.topicId),
-    index("idx_article_topics_topic").on(t.topicId),
+    index("idx_articles_search_vector").using("gin", t.searchVector),
+    // Trigram index backing the typo-tolerant fallback (`title <% query`).
+    index("idx_articles_title_trgm").using("gin", sql`${t.title} gin_trgm_ops`),
+    // Lets the feed's `search_vector @@ ... OR source_domain ILIKE ...` resolve
+    // as a BitmapOr across both indexes instead of falling back to a seq scan.
+    index("idx_articles_domain_trgm").using("gin", sql`${t.sourceDomain} gin_trgm_ops`),
   ]
 );
 

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_articles_domain_trgm" ON "articles" USING gin ("source_domain" gin_trgm_ops);

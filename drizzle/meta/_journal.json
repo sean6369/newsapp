@@ -99,6 +99,27 @@
       "when": 1782724222009,
       "tag": "0013_dashing_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1785307009705,
+      "tag": "0014_add-fulltext-search",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1785308129058,
+      "tag": "0015_drop-entities-and-topics",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1785308609955,
+      "tag": "0016_add-domain-trgm-index",
+      "breakpoints": true
     }
   ]
 }

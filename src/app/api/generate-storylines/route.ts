@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateAndStoreStorylines } from "@/lib/extractor";
+import { generateAndStoreStorylines } from "@/lib/storylines";
 
 export async function POST() {
   try {

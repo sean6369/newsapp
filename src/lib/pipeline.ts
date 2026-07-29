@@ -12,7 +12,6 @@ import { clipArticle } from "./clipper";
 import { buildArticle } from "./articles";
 import { insertArticle, getExistingArticles, updateArticleMetadata, matchStories, updateRelevanceScore } from "./db/queries";
 import { scoreArticle } from "./scorer";
-import { extractAndLinkForArticle } from "./extractor";
 import type { RawArticle, PipelineResult } from "./types";
 
 const MAX_CONCURRENT = 3;
@@ -53,11 +52,10 @@ async function processInBatches<T, R>(
  * - **Phase 1 (awaited here):** fetch sources, dedup, clip + insert, and match
  *   stories — everything needed for new articles to appear in the feed. The
  *   returned `result` is complete once this resolves.
- * - **Phase 2 (`finalize`):** relevance scoring (rate-limited) and entity
- *   extraction. Returned as a continuation so the HTTP route can defer it past
- *   the response via `after()` (keeping the request under Cloudflare's ~100s
- *   limit so the feed's auto-refresh still fires), while the scheduler awaits
- *   it inline.
+ * - **Phase 2 (`finalize`):** relevance scoring (rate-limited). Returned as a
+ *   continuation so the HTTP route can defer it past the response via `after()`
+ *   (keeping the request under Cloudflare's ~100s limit so the feed's
+ *   auto-refresh still fires), while the scheduler awaits it inline.
  */
 export async function runFetchPipeline(options?: {
   date?: string;
@@ -193,12 +191,15 @@ export async function runFetchPipeline(options?: {
     console.log("[pipeline] No new articles to process");
   }
 
-  // 4. Match stories across sources (CNA ↔ ST). Kept in phase 1 — it's a single
-  //    fast SQL query with no external API, so grouping is done before the
-  //    response and is visible as soon as new articles slide in.
+  // 4. Match stories across sources (CNA ↔ ST). Kept in phase 1 so grouping is
+  //    done before the response and is visible as soon as new articles slide
+  //    in. It hits no external API, but it is not cheap: a loop of self-joins
+  //    evaluating title similarity over every same-day pair, ~1s per query and
+  //    at least two queries per run. Cost grows with (articles per day)², so
+  //    revisit this placement if daily volume climbs.
   await matchStories();
 
-  // Phase 2: relevance scoring + entity extraction. Deferred so the caller can
+  // Phase 2: relevance scoring. Deferred so the caller can
   // run it after sending the response (HTTP route) or inline (scheduler).
   const finalize = async () => {
     // Score inserted articles in a throttled pass. scoreArticle self-limits to
@@ -215,25 +216,6 @@ export async function runFetchPipeline(options?: {
         }
       });
       console.log(`[pipeline] Scored ${scored}/${scoreTargets.length} articles`);
-    }
-
-    // Extract entities and topics for newly inserted articles. Reuse the slugs
-    // actually written to the DB (scoreTargets) rather than recomputing them —
-    // this skips duplicates that failed to insert and stays correct even if
-    // slug generation changes.
-    const insertedSlugs = scoreTargets.map((t) => t.slug);
-    if (insertedSlugs.length > 0) {
-      console.log(`[pipeline] Extracting entities/topics for ${insertedSlugs.length} articles...`);
-      let extracted = 0;
-      await processInBatches(insertedSlugs, MAX_CONCURRENT, async (slug) => {
-        try {
-          const success = await extractAndLinkForArticle(slug);
-          if (success) extracted++;
-        } catch (err) {
-          console.error(`[pipeline] Extraction failed for ${slug}:`, err);
-        }
-      });
-      console.log(`[pipeline] Extracted entities/topics for ${extracted}/${insertedSlugs.length} articles`);
     }
 
     console.log(

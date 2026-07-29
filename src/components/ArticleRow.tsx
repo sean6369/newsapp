@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
-import type { ArticleWithRelated } from "@/lib/types";
+import type { Article, ArticleWithRelated } from "@/lib/types";
 import { feedColor, scoreColor, slideVariants } from "./article-shared";
 import { useSourceSwitcher } from "@/hooks/useSourceSwitcher";
 
@@ -12,9 +12,15 @@ interface ArticleRowProps {
   rescoringArticles?: Set<string>;
   menuTrigger?: React.ReactNode;
   onActiveSlugChange?: (slug: string) => void;
+  /**
+   * Override how the title renders. Receives the currently shown source, so a
+   * grouped row keeps the right title when swiped. Used by search to mark
+   * matched terms; defaults to the plain title.
+   */
+  renderTitle?: (article: Article) => React.ReactNode;
 }
 
-export function ArticleRow({ article, rescoringArticles, menuTrigger, onActiveSlugChange }: ArticleRowProps) {
+export function ArticleRow({ article, rescoringArticles, menuTrigger, onActiveSlugChange, renderTitle }: ArticleRowProps) {
   const { active, hasSwitcher, sourceIndex, direction, sources, prev, next, swipeHandlers } = useSourceSwitcher(article);
   const rescoring = rescoringArticles?.has(active.slug) ?? false;
 
@@ -54,7 +60,7 @@ export function ArticleRow({ article, rescoringArticles, menuTrigger, onActiveSl
           </div>
 
           <h2 className="font-serif text-base font-medium leading-snug group-hover:text-accent transition-colors truncate pr-8 max-md:pr-14">
-            {active.title}
+            {renderTitle ? renderTitle(active) : active.title}
           </h2>
 
           <div className="flex items-center mt-1">

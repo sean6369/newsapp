@@ -52,34 +52,62 @@ export interface ArticleFilters {
   sort?: "date-desc" | "date-asc" | "relevance";
 }
 
-export type EntityType = "person" | "organization" | "location" | "product";
+export type SearchSortMode = "relevance" | "date-desc" | "date-asc";
 
-export interface Entity {
-  id: number;
-  name: string;
-  type: EntityType;
+/** Rows per search page. Shared so the server's first page and the client's
+ *  "load more" pages advance the offset by the same amount. */
+export const SEARCH_PAGE_SIZE = 40;
+
+/**
+ * Sort used for the server-rendered first page and the client's initial state.
+ * These must agree: the client skips the first fetch and reuses the server's
+ * rows, so a mismatch would render rank-ordered results under date headings,
+ * shattering the timeline into one group per article. Change it here only.
+ */
+export const DEFAULT_SEARCH_SORT: SearchSortMode = "relevance";
+
+/**
+ * How the results were produced. `fuzzy` means full-text found nothing and we
+ * fell back to trigram title matching, so the UI should say so.
+ */
+export type SearchMode = "fts" | "fuzzy" | "empty";
+
+/** Sentinels wrapped around matched terms by `ts_headline`. Parsed, not injected as HTML. */
+export const HIGHLIGHT_START = "[[HL]]";
+export const HIGHLIGHT_END = "[[/HL]]";
+
+export interface SearchResultArticle extends Article {
+  /** Matched context from the body with terms wrapped in highlight sentinels. */
+  snippet: string | null;
+  /** The full title with matched terms wrapped in the same sentinels. */
+  titleHighlight: string | null;
+  rank: number;
+  relatedArticles?: SearchResultArticle[];
 }
 
-export interface ArticleEntity extends Entity {
-  salience: number | null;
+export interface SearchFilters {
+  query: string;
+  feed?: FeedType | "all";
+  /** Inclusive `YYYY-MM-DD` bounds against `articles.date`. */
+  from?: string;
+  to?: string;
+  sort?: SearchSortMode;
+  limit?: number;
+  offset?: number;
 }
 
-export interface Topic {
-  id: number;
-  name: string;
-}
-
-export type EntitySortMode = "trending" | "mentions" | "alphabetical" | "recent";
-
-export interface EntityListItem {
-  id: number;
-  name: string;
-  type: EntityType;
-  mentionCount: number;
-  trendingMentionCount: number;
-  totalSalience: number;
-  trendingScore: number;
-  lastSeenAt: string | null;
+export interface SearchResponse {
+  /** Matching articles, with same-story duplicates collapsed into `relatedArticles`. */
+  results: SearchResultArticle[];
+  /** Total matching articles before story grouping and pagination. */
+  total: number;
+  /**
+   * Rows this page consumed *before* grouping. Story grouping means
+   * `results.length` is usually smaller, so paging must advance by this
+   * instead — otherwise the next page re-reads rows already shown.
+   */
+  rowCount: number;
+  mode: SearchMode;
 }
 
 export interface PipelineResult {

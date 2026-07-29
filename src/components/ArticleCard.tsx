@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "motion/react";
-import type { ArticleWithRelated } from "@/lib/types";
+import type { Article, ArticleWithRelated } from "@/lib/types";
 import { feedColor, scoreColor, slideVariants } from "./article-shared";
 import { useSourceSwitcher } from "@/hooks/useSourceSwitcher";
 
@@ -12,9 +12,11 @@ interface ArticleCardProps {
   rescoringArticles?: Set<string>;
   menuTrigger?: React.ReactNode;
   onActiveSlugChange?: (slug: string) => void;
+  /** See ArticleRow — overrides title rendering so search can mark matches. */
+  renderTitle?: (article: Article) => React.ReactNode;
 }
 
-export function ArticleCard({ article, rescoringArticles, menuTrigger, onActiveSlugChange }: ArticleCardProps) {
+export function ArticleCard({ article, rescoringArticles, menuTrigger, onActiveSlugChange, renderTitle }: ArticleCardProps) {
   const { active, hasSwitcher, sourceIndex, direction, sources, prev, next, swipeHandlers } = useSourceSwitcher(article);
   const rescoring = rescoringArticles?.has(active.slug) ?? false;
 
@@ -68,7 +70,7 @@ export function ArticleCard({ article, rescoringArticles, menuTrigger, onActiveS
           </div>
 
           <h2 className="font-serif text-lg font-medium leading-snug mb-2 group-hover:text-accent transition-colors line-clamp-2 min-h-[2lh]">
-            {active.title}
+            {renderTitle ? renderTitle(active) : active.title}
           </h2>
 
           <p className="text-sm text-muted leading-relaxed line-clamp-3">

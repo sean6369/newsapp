@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getArticleBySlug, getArticleContent, getEntitiesForArticle, getTopicsForArticle } from "@/lib/db/queries";
+import { getArticleBySlug, getArticleContent } from "@/lib/db/queries";
 import { ArticleReaderClient } from "./ArticleReaderClient";
 
 interface ArticlePageProps {
@@ -14,18 +14,12 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
     notFound();
   }
 
-  const [content, entities, topics] = await Promise.all([
-    getArticleContent(slug),
-    getEntitiesForArticle(slug),
-    getTopicsForArticle(slug),
-  ]);
+  const content = await getArticleContent(slug);
 
   return (
     <ArticleReaderClient
       article={article}
       content={content ?? article.summary}
-      entities={entities}
-      topics={topics}
     />
   );
 }
