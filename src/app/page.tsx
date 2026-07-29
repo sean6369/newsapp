@@ -1,12 +1,11 @@
 import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { Feed } from "@/components/Feed";
-import type { ViewMode } from "@/components/ArticleGrid";
+import { FEED_VIEW_COOKIE, parseViewCookie } from "@/lib/view-cookie";
 
 async function FeedWithView() {
   const cookieStore = await cookies();
-  const viewCookie = cookieStore.get("feed-view")?.value;
-  const initialView: ViewMode = viewCookie === "list" ? "list" : "grid";
+  const initialView = parseViewCookie(cookieStore.get(FEED_VIEW_COOKIE)?.value, "grid");
 
   return <Feed initialView={initialView} />;
 }

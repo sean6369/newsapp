@@ -1,12 +1,15 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Tabs, SearchField, Select, ListBox, ListBoxItem, Dropdown, Drawer, ToggleButtonGroup, ToggleButton, useOverlayState } from "@heroui/react";
-import type { ArticleFilters } from "@/lib/types";
+import type { ArticleFilters, FeedType } from "@/lib/types";
 import type { ViewMode } from "./ArticleGrid";
 
+type FeedValue = FeedType | "all";
+
 interface FeedFilterProps {
-  filters: ArticleFilters;
-  onFilterChange: (filters: Partial<ArticleFilters>) => void;
+  feed: FeedValue | undefined;
+  onFeedChange: (feed: FeedValue) => void;
 }
 
 const feedOptions = [
@@ -19,25 +22,23 @@ const feedOptions = [
   { value: "tech", label: "Tech" },
 ] as const;
 
-export function FeedFilter({ filters, onFilterChange }: FeedFilterProps) {
-  const currentFeed = filters.feed || "all";
+export function FeedFilter({ feed, onFeedChange }: FeedFilterProps) {
+  const currentFeed = feed || "all";
   const currentLabel = feedOptions.find((o) => o.value === currentFeed)?.label ?? "All";
 
   return (
     <>
       {/* Desktop: Tabs */}
-      <div className="hidden md:block">
+      <div className="hidden md:block min-w-0">
         <Tabs
           variant="secondary"
           selectedKey={currentFeed}
-          onSelectionChange={(key) =>
-            onFilterChange({ feed: key as ArticleFilters["feed"] })
-          }
+          onSelectionChange={(key) => onFeedChange(key as FeedValue)}
         >
           <Tabs.ListContainer>
             <Tabs.List aria-label="Feed filter">
               {feedOptions.map((opt) => (
-                <Tabs.Tab key={opt.value} id={opt.value}>
+                <Tabs.Tab key={opt.value} id={opt.value} className="min-w-20 px-0">
                   {opt.label}
                   <Tabs.Indicator />
                 </Tabs.Tab>
@@ -59,8 +60,8 @@ export function FeedFilter({ filters, onFilterChange }: FeedFilterProps) {
               selectionMode="single"
               selectedKeys={new Set([currentFeed])}
               onSelectionChange={(keys) => {
-                const selected = [...keys][0] as ArticleFilters["feed"];
-                if (selected) onFilterChange({ feed: selected });
+                const selected = [...keys][0] as FeedValue | undefined;
+                if (selected) onFeedChange(selected);
               }}
             >
               {feedOptions.map((opt) => (
@@ -136,15 +137,28 @@ export function FeedSearch({ filters, onFilterChange }: FeedSearchProps) {
   );
 }
 
+type SortValue = NonNullable<ArticleFilters["sort"]>;
+
 interface MobileSettingsProps {
-  filters: ArticleFilters;
-  onFilterChange: (filters: Partial<ArticleFilters>) => void;
+  sort: SortValue | undefined;
+  onSortChange: (sort: SortValue) => void;
   view: ViewMode;
   onViewChange: (view: ViewMode) => void;
+  /** Labels differ per page — search calls "relevance" Best match, the feed calls it Relevance. */
+  sortLabels?: readonly { value: SortValue; label: string }[];
+  /** Extra sections rendered above Sort, e.g. the search page's date range. */
+  children?: (close: () => void) => ReactNode;
 }
 
-export function MobileSettings({ filters, onFilterChange, view, onViewChange }: MobileSettingsProps) {
-  const currentSort = filters.sort || "date-desc";
+export function MobileSettings({
+  sort,
+  onSortChange,
+  view,
+  onViewChange,
+  sortLabels = sortOptions,
+  children,
+}: MobileSettingsProps) {
+  const currentSort = sort || "date-desc";
   const drawerState = useOverlayState();
 
   return (
@@ -172,16 +186,18 @@ export function MobileSettings({ filters, onFilterChange, view, onViewChange }: 
               </Drawer.Header>
               <Drawer.Body>
                 <div className="flex flex-col gap-6">
+                  {children?.(drawerState.close)}
+
                   {/* Sort */}
                   <div>
                     <h3 className="text-xs font-medium uppercase tracking-wider text-muted mb-3">Sort by</h3>
                     <div className="flex flex-col gap-1">
-                      {sortOptions.map((opt) => (
+                      {sortLabels.map((opt) => (
                         <button
                           key={opt.value}
                           type="button"
                           onClick={() => {
-                            onFilterChange({ sort: opt.value as ArticleFilters["sort"] });
+                            onSortChange(opt.value);
                             drawerState.close();
                           }}
                           className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${

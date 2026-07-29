@@ -23,18 +23,10 @@ import type {
 } from "@/lib/types";
 import { SEARCH_PAGE_SIZE, DEFAULT_SEARCH_SORT } from "@/lib/types";
 import { ArticleTimeline, formatShortDate, toDateStr } from "./ArticleTimeline";
+import { FeedFilter, MobileSettings } from "./FeedFilter";
+import { SEARCH_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
 import { SearchSnippet, HighlightedText } from "./SearchSnippet";
 import type { ViewMode } from "./ArticleGrid";
-
-const feedOptions: Array<{ value: FeedType | "all"; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "singapore", label: "Singapore" },
-  { value: "world", label: "World" },
-  { value: "asia", label: "Asia" },
-  { value: "finance", label: "Finance" },
-  { value: "ai", label: "AI" },
-  { value: "tech", label: "Tech" },
-];
 
 const sortOptions: Array<{ value: SearchSortMode; label: string }> = [
   { value: "relevance", label: "Best match" },
@@ -65,6 +57,8 @@ export interface SearchPageProps {
   initialMode: SearchMode;
   /** Every date that has articles, newest first. Bounds and greys out the calendar. */
   availableDates: string[];
+  /** Read from the search-view cookie server-side, so the first paint is already correct. */
+  initialView?: ViewMode;
 }
 
 export function SearchPage({
@@ -74,6 +68,7 @@ export function SearchPage({
   initialRowCount,
   initialMode,
   availableDates,
+  initialView = "list",
 }: SearchPageProps) {
   const router = useRouter();
 
@@ -89,7 +84,7 @@ export function SearchPage({
   const [feed, setFeed] = useState<FeedType | "all">("all");
   const [range, setRange] = useState<DateRange | null>(null);
   const [sort, setSort] = useState<SearchSortMode>(DEFAULT_SEARCH_SORT);
-  const [view, setView] = useState<ViewMode>("list");
+  const [view, setView] = useState<ViewMode>(initialView);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   const [results, setResults] = useState(initialResults);
@@ -215,11 +210,95 @@ export function SearchPage({
     }
   }
 
-  function handleRangeChange(value: { start: DateValue; end: DateValue } | null) {
-    if (!value) return;
-    setRange({ start: value.start.toString(), end: value.end.toString() });
-    // Only fires once both ends are picked, so the range is complete here.
-    setIsCalendarOpen(false);
+  const handleViewChange = (selected: ViewMode) => {
+    setView(selected);
+    setViewCookie(SEARCH_VIEW_COOKIE, selected);
+  };
+
+  // Rendered twice — inside the desktop popover and inside the mobile settings
+  // drawer — so `onDone` is whichever overlay is currently holding it.
+  function renderDateRangePanel(onDone: () => void) {
+    if (!dateBounds) return null;
+
+    const setPreset = (from: Date) => {
+      const today = new Date();
+      setRange({ start: toDateStr(from), end: toDateStr(today) });
+      onDone();
+    };
+
+    // `w-fit mx-auto` sizes the column to the calendar and centres it: the
+    // drawer is far wider than the desktop popover, and the presets inherit
+    // that width so they line up with the calendar's edges.
+    return (
+      <div className="flex flex-col w-fit mx-auto">
+        <RangeCalendar
+          value={calendarValue}
+          onChange={(value: { start: DateValue; end: DateValue } | null) => {
+            if (!value) return;
+            setRange({ start: value.start.toString(), end: value.end.toString() });
+            // Only fires once both ends are picked, so the range is complete here.
+            onDone();
+          }}
+          minValue={parseDate(dateBounds.min)}
+          maxValue={parseDate(dateBounds.max)}
+          isDateUnavailable={(date) => !datesSet.has(date.toString())}
+        >
+          <RangeCalendar.Header className="flex w-full items-center justify-between">
+            <RangeCalendar.Heading />
+            <div className="flex items-center gap-1">
+              <RangeCalendar.NavButton slot="previous" />
+              <RangeCalendar.NavButton slot="next" />
+            </div>
+          </RangeCalendar.Header>
+          <RangeCalendar.Grid>
+            <RangeCalendar.GridHeader>
+              {(day) => <RangeCalendar.HeaderCell>{day}</RangeCalendar.HeaderCell>}
+            </RangeCalendar.GridHeader>
+            <RangeCalendar.GridBody>
+              {(date) => <RangeCalendar.Cell date={date} />}
+            </RangeCalendar.GridBody>
+          </RangeCalendar.Grid>
+        </RangeCalendar>
+        <div className="flex items-center gap-2 border-t border-default pt-2 mt-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            fullWidth
+            onPress={() => {
+              const weekAgo = new Date();
+              weekAgo.setDate(weekAgo.getDate() - 7);
+              setPreset(weekAgo);
+            }}
+          >
+            Last week
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            fullWidth
+            onPress={() => {
+              const monthAgo = new Date();
+              monthAgo.setMonth(monthAgo.getMonth() - 1);
+              setPreset(monthAgo);
+            }}
+          >
+            Last month
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            fullWidth
+            isDisabled={!range}
+            onPress={() => {
+              setRange(null);
+              onDone();
+            }}
+          >
+            All time
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   const calendarValue = range
@@ -279,160 +358,109 @@ export function SearchPage({
         </SearchField>
 
         {/* Toolbar */}
-        <div className="flex flex-wrap items-center gap-2 mb-6">
-          {feedOptions.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setFeed(opt.value)}
-              className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
-                feed === opt.value
-                  ? "border-accent bg-accent/10 text-accent font-medium"
-                  : "border-border text-muted hover:border-accent/40 hover:text-foreground"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 mb-6">
+          <FeedFilter feed={feed} onFeedChange={setFeed} />
 
           <div className="flex-1" />
 
-          {/* Date range */}
-          {dateBounds && (
-            <Popover.Root isOpen={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-              <Popover.Trigger>
-                <button
-                  className={`px-3 py-1.5 text-sm rounded-full border transition-colors inline-flex items-center gap-1.5 ${
-                    range
-                      ? "border-accent bg-accent/10 text-accent"
-                      : "border-border text-muted hover:border-accent/40 hover:text-foreground"
-                  }`}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                    <line x1="16" y1="2" x2="16" y2="6" />
-                    <line x1="8" y1="2" x2="8" y2="6" />
-                    <line x1="3" y1="10" x2="21" y2="10" />
-                  </svg>
-                  {rangeLabel ?? "All time"}
-                </button>
-              </Popover.Trigger>
-              <Popover.Content>
-                <Popover.Dialog>
-                  <RangeCalendar
-                    value={calendarValue}
-                    onChange={handleRangeChange}
-                    minValue={parseDate(dateBounds.min)}
-                    maxValue={parseDate(dateBounds.max)}
-                    isDateUnavailable={(date) => !datesSet.has(date.toString())}
+          {/* Desktop controls, inline as on the home feed */}
+          <div className="hidden md:flex items-center gap-2">
+            {/* Date range */}
+            {dateBounds && (
+              <Popover.Root isOpen={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                <Popover.Trigger>
+                  <button
+                    className={`px-3 py-1.5 text-sm rounded-full border transition-colors inline-flex items-center gap-1.5 ${
+                      range
+                        ? "border-accent bg-accent/10 text-accent"
+                        : "border-border text-muted hover:border-accent/40 hover:text-foreground"
+                    }`}
                   >
-                    <RangeCalendar.Header className="flex w-full items-center justify-between">
-                      <RangeCalendar.Heading />
-                      <div className="flex items-center gap-1">
-                        <RangeCalendar.NavButton slot="previous" />
-                        <RangeCalendar.NavButton slot="next" />
-                      </div>
-                    </RangeCalendar.Header>
-                    <RangeCalendar.Grid>
-                      <RangeCalendar.GridHeader>
-                        {(day) => <RangeCalendar.HeaderCell>{day}</RangeCalendar.HeaderCell>}
-                      </RangeCalendar.GridHeader>
-                      <RangeCalendar.GridBody>
-                        {(date) => <RangeCalendar.Cell date={date} />}
-                      </RangeCalendar.GridBody>
-                    </RangeCalendar.Grid>
-                  </RangeCalendar>
-                  <div className="flex items-center gap-2 border-t border-default pt-2 mt-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      fullWidth
-                      onPress={() => {
-                        const today = new Date();
-                        const weekAgo = new Date();
-                        weekAgo.setDate(today.getDate() - 7);
-                        setRange({ start: toDateStr(weekAgo), end: toDateStr(today) });
-                        setIsCalendarOpen(false);
-                      }}
-                    >
-                      Last week
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      fullWidth
-                      onPress={() => {
-                        const today = new Date();
-                        const monthAgo = new Date();
-                        monthAgo.setMonth(today.getMonth() - 1);
-                        setRange({ start: toDateStr(monthAgo), end: toDateStr(today) });
-                        setIsCalendarOpen(false);
-                      }}
-                    >
-                      Last month
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      fullWidth
-                      isDisabled={!range}
-                      onPress={() => {
-                        setRange(null);
-                        setIsCalendarOpen(false);
-                      }}
-                    >
-                      All time
-                    </Button>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                      <line x1="16" y1="2" x2="16" y2="6" />
+                      <line x1="8" y1="2" x2="8" y2="6" />
+                      <line x1="3" y1="10" x2="21" y2="10" />
+                    </svg>
+                    {rangeLabel ?? "All time"}
+                  </button>
+                </Popover.Trigger>
+                <Popover.Content>
+                  <Popover.Dialog>
+                    {renderDateRangePanel(() => setIsCalendarOpen(false))}
+                  </Popover.Dialog>
+                </Popover.Content>
+              </Popover.Root>
+            )}
+
+            <Select
+              aria-label="Sort results"
+              selectedKey={sort}
+              onSelectionChange={(key) => setSort(key as SearchSortMode)}
+            >
+              <Select.Trigger className="min-w-[110px] md:min-w-[140px]">
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  {sortOptions.map((opt) => (
+                    <ListBoxItem key={opt.value} id={opt.value} textValue={opt.label}>
+                      {opt.label}
+                    </ListBoxItem>
+                  ))}
+                </ListBox>
+              </Select.Popover>
+            </Select>
+
+            <ToggleButtonGroup
+              selectionMode="single"
+              selectedKeys={new Set([view])}
+              onSelectionChange={(keys) => {
+                const selected = [...keys][0] as ViewMode | undefined;
+                if (selected) handleViewChange(selected);
+              }}
+            >
+              <ToggleButton id="grid" aria-label="Grid view">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
+                  <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
+                  <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
+                  <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
+                </svg>
+              </ToggleButton>
+              <ToggleButton id="list" aria-label="List view">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <line x1="1" y1="3" x2="15" y2="3" />
+                  <line x1="1" y1="8" x2="15" y2="8" />
+                  <line x1="1" y1="13" x2="15" y2="13" />
+                </svg>
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </div>
+
+          {/* Mobile: same settings drawer as the home feed, plus date range */}
+          <MobileSettings
+            sort={sort}
+            onSortChange={setSort}
+            sortLabels={sortOptions}
+            view={view}
+            onViewChange={handleViewChange}
+          >
+            {(close) =>
+              dateBounds && (
+                <div>
+                  <div className="flex items-baseline justify-between gap-3 mb-3">
+                    <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
+                      Date range
+                    </h3>
+                    <span className="text-sm text-muted">{rangeLabel ?? "All time"}</span>
                   </div>
-                </Popover.Dialog>
-              </Popover.Content>
-            </Popover.Root>
-          )}
-
-          <Select
-            aria-label="Sort results"
-            selectedKey={sort}
-            onSelectionChange={(key) => setSort(key as SearchSortMode)}
-          >
-            <Select.Trigger className="min-w-[110px] md:min-w-[140px]">
-              <Select.Value />
-              <Select.Indicator />
-            </Select.Trigger>
-            <Select.Popover>
-              <ListBox>
-                {sortOptions.map((opt) => (
-                  <ListBoxItem key={opt.value} id={opt.value} textValue={opt.label}>
-                    {opt.label}
-                  </ListBoxItem>
-                ))}
-              </ListBox>
-            </Select.Popover>
-          </Select>
-
-          <ToggleButtonGroup
-            selectionMode="single"
-            selectedKeys={new Set([view])}
-            onSelectionChange={(keys) => {
-              const selected = [...keys][0] as ViewMode | undefined;
-              if (selected) setView(selected);
-            }}
-          >
-            <ToggleButton id="grid" aria-label="Grid view">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
-                <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
-                <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
-                <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
-              </svg>
-            </ToggleButton>
-            <ToggleButton id="list" aria-label="List view">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="1" y1="3" x2="15" y2="3" />
-                <line x1="1" y1="8" x2="15" y2="8" />
-                <line x1="1" y1="13" x2="15" y2="13" />
-              </svg>
-            </ToggleButton>
-          </ToggleButtonGroup>
+                  {renderDateRangePanel(close)}
+                </div>
+              )
+            }
+          </MobileSettings>
         </div>
 
         {/* Result meta. Kept (dimmed) while a new search is in flight, so the

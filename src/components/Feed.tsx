@@ -6,17 +6,12 @@ import { useArticles } from "@/hooks/useArticles";
 import { FeedFilter, FeedSearch, FeedSort, MobileSettings } from "@/components/FeedFilter";
 import { DateNav } from "@/components/DateNav";
 import { ArticleGrid, type ViewMode } from "@/components/ArticleGrid";
-
-const VIEW_COOKIE = "feed-view";
+import { FEED_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
 
 // Module-level flag: only run /api/fetch on the first mount per page load.
 // Back-navigation remounts the component but this stays true, skipping the fetch.
 // A full page reload re-evaluates the module, resetting it to false.
 let hasFetchedOnce = false;
-
-function setViewCookie(value: string) {
-  document.cookie = `${VIEW_COOKIE}=${value};path=/;max-age=${60 * 60 * 24 * 365};SameSite=Lax`;
-}
 
 export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
   const { articles, dates, loading, fetching, error, filters, setFilters, refetch, lastFetchTime, rescoringArticles, rescoreArticle, lastRescoredSlug, deleteArticle } = useArticles();
@@ -44,7 +39,7 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
 
   const handleViewChange = (selected: ViewMode) => {
     setView(selected);
-    setViewCookie(selected);
+    setViewCookie(FEED_VIEW_COOKIE, selected);
   };
 
   return (
@@ -59,8 +54,8 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
       {/* Desktop toolbar */}
       <div className="hidden md:flex items-center justify-between mb-6">
         <FeedFilter
-          filters={filters}
-          onFilterChange={setFilters}
+          feed={filters.feed}
+          onFeedChange={(feed) => setFilters({ feed })}
         />
         <div className="flex items-center gap-3">
           <FeedSearch
@@ -101,16 +96,16 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
       {/* Mobile toolbar */}
       <div className="flex md:hidden items-center gap-2 mb-6">
         <FeedFilter
-          filters={filters}
-          onFilterChange={setFilters}
+          feed={filters.feed}
+          onFeedChange={(feed) => setFilters({ feed })}
         />
         <FeedSearch
           filters={filters}
           onFilterChange={setFilters}
         />
         <MobileSettings
-          filters={filters}
-          onFilterChange={setFilters}
+          sort={filters.sort}
+          onSortChange={(sort) => setFilters({ sort })}
           view={view}
           onViewChange={handleViewChange}
         />
