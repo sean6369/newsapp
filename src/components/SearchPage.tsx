@@ -42,6 +42,16 @@ const sortOptions: Array<{ value: SearchSortMode; label: string }> = [
   { value: "date-asc", label: "Oldest" },
 ];
 
+// Postgres `websearch_to_tsquery` syntax — see searchArticles() in db/queries.
+// Straight quotes only: it does not recognise the typographic kind.
+const searchTips: Array<{ example: string; meaning: string }> = [
+  { example: "chip smuggling", meaning: "Both words, anywhere in the article" },
+  { example: '"rate cut"', meaning: "The exact phrase, words side by side" },
+  { example: "tariffs or sanctions", meaning: "Either word" },
+  { example: "rates -crypto", meaning: "Everything about rates, minus crypto" },
+  { example: '"data centre" -singapore', meaning: "Mix them freely" },
+];
+
 interface DateRange {
   start: string;
   end: string;
@@ -206,7 +216,10 @@ export function SearchPage({
   }
 
   function handleRangeChange(value: { start: DateValue; end: DateValue } | null) {
-    if (value) setRange({ start: value.start.toString(), end: value.end.toString() });
+    if (!value) return;
+    setRange({ start: value.start.toString(), end: value.end.toString() });
+    // Only fires once both ends are picked, so the range is complete here.
+    setIsCalendarOpen(false);
   }
 
   const calendarValue = range
@@ -232,7 +245,11 @@ export function SearchPage({
     return map;
   }, [results]);
 
-  const hasQuery = query.trim().length > 0;
+  // The box is what the reader is searching for; `query` lags it by the
+  // debounce. Treating that gap as "searching" keeps the results area from
+  // flashing an empty state during the 300ms before the request goes out.
+  const hasQuery = input.trim().length > 0 || query.trim().length > 0;
+  const searching = loading || input.trim() !== query.trim();
   // Rank order has no date structure, so only group into a timeline by date.
   const grouped = resultsSort !== "relevance";
 
@@ -256,10 +273,7 @@ export function SearchPage({
         >
           <SearchField.Group>
             <SearchField.SearchIcon />
-            <SearchField.Input
-              className="w-full"
-              placeholder={`Search articles — try "chip smuggling" or rates -crypto`}
-            />
+            <SearchField.Input className="w-full" placeholder="Search articles" />
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
@@ -421,9 +435,16 @@ export function SearchPage({
           </ToggleButtonGroup>
         </div>
 
-        {/* Result meta */}
-        {hasQuery && !loading && (
-          <div className="mb-4">
+        {/* Result meta. Kept (dimmed) while a new search is in flight, so the
+            page doesn't reflow around the results it is about to replace. */}
+        {hasQuery && (results.length > 0 || !searching) && (
+          <div
+            className="mb-4"
+            style={{
+              opacity: searching ? 0.5 : 1,
+              transition: "opacity 0.15s ease",
+            }}
+          >
             <p className="text-sm text-muted">
               {total === 0
                 ? "No matches"
@@ -439,18 +460,34 @@ export function SearchPage({
 
         {/* Results */}
         {!hasQuery ? (
-          <div className="py-20 text-center">
-            <p className="text-muted text-sm">
-              Search across every article in the archive.
+          <div className="py-16">
+            <p className="text-center text-sm text-muted">
+              Every article in the archive — titles, summaries and full text.
             </p>
-            <p className="text-muted text-xs mt-2">
-              Supports quoted phrases, <code className="font-mono">-excluded</code> terms,
-              and <code className="font-mono">or</code>.
+
+            <dl className="mx-auto mt-8 max-w-lg space-y-3">
+              {searchTips.map((tip) => (
+                <div
+                  key={tip.example}
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 sm:flex-nowrap"
+                >
+                  <dt className="sm:w-[45%] sm:flex-shrink-0 sm:text-right">
+                    <code className="font-mono text-xs rounded border border-border bg-card-bg px-1.5 py-0.5 text-foreground">
+                      {tip.example}
+                    </code>
+                  </dt>
+                  <dd className="text-xs text-muted">{tip.meaning}</dd>
+                </div>
+              ))}
+            </dl>
+
+            <p className="mx-auto mt-8 max-w-md text-center text-xs text-muted">
+              Words match by stem, so <span className="font-mono">smuggling</span> also
+              finds <span className="font-mono">smuggled</span>. Misspell something and
+              the closest headlines come back instead.
             </p>
           </div>
-        ) : loading ? (
-          <p className="text-muted text-sm py-16 text-center">Searching...</p>
-        ) : results.length === 0 ? (
+        ) : !searching && results.length === 0 ? (
           <p className="text-muted text-sm py-16 text-center">
             Nothing found. Try fewer or different words.
           </p>
@@ -460,6 +497,8 @@ export function SearchPage({
               articles={results}
               view={view}
               grouped={grouped}
+              fetching={searching}
+              sort={resultsSort}
               renderExtra={(article) =>
                 article.snippet ? <SearchSnippet snippet={article.snippet} /> : null
               }
@@ -473,7 +512,7 @@ export function SearchPage({
               }}
             />
 
-            {rowsLoaded < total && (
+            {!searching && rowsLoaded < total && (
               <div className="flex justify-center mt-8">
                 <Button variant="ghost" onPress={loadMore} isDisabled={loadingMore}>
                   {loadingMore ? "Loading..." : `Load more (${total - rowsLoaded} left)`}

@@ -1,7 +1,7 @@
 "use client";
 
 /* eslint-disable react-hooks/refs -- Animation state (generation counters, previous keys, FLIP flags) uses refs during render intentionally to avoid cascading re-renders */
-import { useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { motion } from "motion/react";
 import type { ArticleWithRelated } from "@/lib/types";
 import { ArticleCard } from "./ArticleCard";
@@ -9,6 +9,13 @@ import { ArticleRow } from "./ArticleRow";
 import { ArticleContextMenu } from "./ArticleContextMenu";
 import { LoadingCard, LoadingRow } from "./LoadingCard";
 import { BallBouncingLoader } from "./BallBouncingLoader";
+import { useFlipAnimation } from "./useFlipAnimation";
+import {
+  ENTRANCE_LIMIT,
+  entranceAnimate,
+  entranceInitial,
+  entranceTransition,
+} from "./article-shared";
 
 export type ViewMode = "grid" | "list";
 
@@ -77,97 +84,22 @@ export function ArticleGrid({ articles, loading, fetching, view = "grid", sort, 
     });
   }, [onDelete]);
 
-  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-
-  const setCardRef = useCallback((slug: string, el: HTMLDivElement | null) => {
-    if (el) cardRefs.current.set(slug, el);
-    else cardRefs.current.delete(slug);
-  }, []);
-
   const scrollTargetRef = useRef<string | null>(null);
   useEffect(() => {
     scrollTargetRef.current = lastRescoredSlug ?? null;
   }, [lastRescoredSlug]);
 
-  const onLayoutDone = useCallback((slug: string) => {
-    if (slug === scrollTargetRef.current) {
-      scrollTargetRef.current = null;
-      const el = cardRefs.current.get(slug);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
+  const onLayoutDone = useCallback((slug: string, el: HTMLElement) => {
+    if (slug !== scrollTargetRef.current) return;
+    scrollTargetRef.current = null;
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, []);
 
-  // --- Manual FLIP animation (replaces framer-motion layout) ---
-  const prevRectsRef = useRef<Map<HTMLDivElement, DOMRect>>(new Map());
-  const runningAnimsRef = useRef<Map<HTMLDivElement, Animation>>(new Map());
-  const flipEnabledRef = useRef(true);
-  flipEnabledRef.current = enableLayout;
-
-  useLayoutEffect(() => {
-    const prev = prevRectsRef.current;
-
-    // Cancel in-progress animations (before paint, no visual flash)
-    runningAnimsRef.current.forEach((anim) => anim.cancel());
-    runningAnimsRef.current.clear();
-
-    // Capture current layout rects
-    const newRects = new Map<HTMLDivElement, DOMRect>();
-    const slugByEl = new Map<HTMLDivElement, string>();
-
-    cardRefs.current.forEach((el, slug) => {
-      newRects.set(el, el.getBoundingClientRect());
-      slugByEl.set(el, slug);
-    });
-
-    // Animate position deltas (FLIP: First-Last-Invert-Play)
-    if (flipEnabledRef.current && prev.size > 0) {
-      newRects.forEach((newRect, el) => {
-        const oldRect = prev.get(el);
-        if (!oldRect) return;
-
-        const dx = oldRect.left - newRect.left;
-        const dy = oldRect.top - newRect.top;
-        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
-
-        const anim = el.animate(
-          [
-            { transform: `translate(${dx}px, ${dy}px)` },
-            { transform: "translate(0, 0)" },
-          ],
-          { duration: 450, easing: "cubic-bezier(0.33, 1.15, 0.5, 1)" },
-        );
-
-        runningAnimsRef.current.set(el, anim);
-
-        const slug = slugByEl.get(el);
-        if (slug) {
-          anim.finished
-            .then(() => {
-              runningAnimsRef.current.delete(el);
-              onLayoutDone(slug);
-            })
-            .catch(() => {}); // ignore cancel rejection
-        }
-      });
-    }
-
-    prevRectsRef.current = newRects;
-  }, [articles, view, onLayoutDone]);
-
-  // Keep prevRects fresh on window resize (no animation, just recapture)
-  useEffect(() => {
-    const handleResize = () => {
-      runningAnimsRef.current.forEach((anim) => anim.cancel());
-      runningAnimsRef.current.clear();
-      const newRects = new Map<HTMLDivElement, DOMRect>();
-      cardRefs.current.forEach((el) => {
-        newRects.set(el, el.getBoundingClientRect());
-      });
-      prevRectsRef.current = newRects;
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  const setCardRef = useFlipAnimation({
+    enabled: enableLayout,
+    deps: [articles, view],
+    onSettled: onLayoutDone,
+  });
 
   if (loading) {
     return view === "list" ? (
@@ -219,12 +151,9 @@ export function ArticleGrid({ articles, loading, fetching, view = "grid", sort, 
           <motion.div
             key={cardKey}
             ref={(el) => setCardRef(article.slug, el)}
-            initial={genRef.current > 0 && !skipEntrance && i < 18 ? { opacity: 0, y: 12 } : false}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{
-              opacity: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1], delay: Math.min(i * 0.04, 0.25) },
-              y: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1], delay: Math.min(i * 0.04, 0.25) },
-            }}
+            initial={genRef.current > 0 && !skipEntrance && i < ENTRANCE_LIMIT ? entranceInitial : false}
+            animate={entranceAnimate}
+            transition={entranceTransition(i)}
           >
             <ArticleContextMenu
               slug={article.slug}
