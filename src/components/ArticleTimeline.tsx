@@ -105,7 +105,10 @@ export function ArticleTimeline<T extends ArticleWithRelated>({
       <div className="absolute left-[7px] top-2 bottom-0 w-px bg-border" />
 
       {dateGroups.map((group, i) => (
-        <div key={group.date} className={i > 0 ? "mt-8" : ""}>
+        // Groups are consecutive runs, so a date is unique only while the
+        // articles are date-ordered. Index-qualify the key so a transient
+        // out-of-order list degrades visually instead of throwing.
+        <div key={`${group.date}-${i}`} className={i > 0 ? "mt-8" : ""}>
           {/* Date label with dot */}
           <div className="relative flex items-center gap-3 mb-4">
             <div className="w-[15px] flex-shrink-0 flex justify-center">

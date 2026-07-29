@@ -88,10 +88,16 @@ export function SearchPage({
   // from results.length once story grouping collapses duplicates.
   const [rowsLoaded, setRowsLoaded] = useState(initialRowCount);
   const [mode, setMode] = useState<SearchMode>(initialMode);
+  // The sort the currently displayed results were actually fetched with. `sort`
+  // changes the instant the dropdown does, a render before the new rows arrive,
+  // so grouping must follow this instead — otherwise rank-ordered rows get laid
+  // out under date headings and shatter into repeated groups.
+  const [resultsSort, setResultsSort] = useState<SearchSortMode>(DEFAULT_SEARCH_SORT);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
   // Skip the first fetch: the server already rendered results for this query.
   const hydratedRef = useRef(true);
 
@@ -132,6 +138,10 @@ export function SearchPage({
     if (!trimmed) return;
 
     abortRef.current?.abort();
+    // A page-2 request still in flight belongs to the previous result set. Let
+    // it land and it would append rows in the old sort order onto the new ones
+    // and inflate rowsLoaded, so cancel it alongside the search it came from.
+    loadMoreAbortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -147,6 +157,7 @@ export function SearchPage({
         setTotal(data.total);
         setRowsLoaded(data.rowCount);
         setMode(data.mode);
+        setResultsSort(sort);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setResults([]);
@@ -162,12 +173,18 @@ export function SearchPage({
     })();
 
     return () => controller.abort();
-  }, [query, buildParams, router]);
+  }, [query, sort, buildParams, router]);
 
   async function loadMore() {
+    loadMoreAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
+
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/search?${buildParams(rowsLoaded)}`);
+      const res = await fetch(`/api/search?${buildParams(rowsLoaded)}`, {
+        signal: controller.signal,
+      });
       if (!res.ok) throw new Error("Search failed");
       const data = await res.json();
       setResults((prev) => {
@@ -181,9 +198,10 @@ export function SearchPage({
       });
       setRowsLoaded((prev) => prev + data.rowCount);
     } catch {
-      // Leave what is already on screen; the button stays available to retry.
+      // Aborted, or the request failed. Either way nothing was applied — leave
+      // what is on screen and keep the button available to retry.
     } finally {
-      setLoadingMore(false);
+      if (!controller.signal.aborted) setLoadingMore(false);
     }
   }
 
@@ -216,7 +234,7 @@ export function SearchPage({
 
   const hasQuery = query.trim().length > 0;
   // Rank order has no date structure, so only group into a timeline by date.
-  const grouped = sort !== "relevance";
+  const grouped = resultsSort !== "relevance";
 
   return (
     <div className="min-h-dvh bg-background">
