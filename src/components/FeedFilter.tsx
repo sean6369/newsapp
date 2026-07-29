@@ -48,10 +48,12 @@ export function FeedFilter({ feed, onFeedChange }: FeedFilterProps) {
         </Tabs>
       </div>
 
-      {/* Mobile: Dropdown */}
+      {/* Mobile: Dropdown. Fixed width so it does not resize as the feed
+          changes, matching the desktop tabs' own min-width. Sized to
+          "Singapore", the longest label. */}
       <div className="md:hidden">
         <Dropdown>
-          <Dropdown.Trigger className="px-3 py-1.5 text-sm font-medium border-2 border-border rounded-lg bg-background hover:border-accent/40 transition-colors">
+          <Dropdown.Trigger className="min-w-28 text-center px-3 py-1.5 text-sm font-medium border-2 border-border rounded-lg bg-background hover:border-accent/40 transition-colors">
             {currentLabel}
           </Dropdown.Trigger>
           <Dropdown.Popover>

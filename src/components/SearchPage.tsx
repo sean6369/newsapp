@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Button,
   ListBox,
@@ -49,6 +49,46 @@ interface DateRange {
   start: string;
   end: string;
 }
+
+// How far the search box sits below the header while the page is empty, and
+// therefore exactly how far it travels. An explicit length rather than flex
+// centring: the results mount in the same frame the box starts moving, and
+// anything derived from content height gets yanked out from under the
+// animation as they do.
+//
+// svh, not dvh. The empty page is tall enough to scroll on a phone, and
+// scrolling retracts the browser's URL bar — which changes dvh, which would
+// re-run the transition below and drift the box under the reader's thumb.
+// svh is pinned to the URL-bar-visible height and never moves.
+const HERO_OFFSET = "20svh";
+
+// Sitting low, the box pulls in off the full content column, which at 80rem
+// reads as a page banner rather than something to type into. Both ends are
+// concrete lengths because `none` would not interpolate.
+const HERO_WIDTH_LOW = "48rem";
+/** The content column's own max-w-7xl, i.e. no visible constraint. */
+const HERO_WIDTH_TOP = "80rem";
+
+// The same curve twice: the box moves on a CSS transition, the toolbar and
+// results on Motion, and they have to agree or the sequence stops reading as
+// one gesture. The delays below are measured against the 400ms here too, so
+// changing that duration means revisiting them.
+const heroEase =
+  "duration-[400ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] motion-reduce:transition-none";
+const heroEaseCurve: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
+
+// The empty page comes back to life in one order: the box rises and widens,
+// the toolbar unrolls under it, then the results arrive. Each starts while the
+// one above it is still moving — a clean gap between them reads as three
+// separate animations rather than one movement. Seconds, against the box's
+// own 400ms.
+const SEQ_TOOLBAR_DELAY = 0.18;
+const SEQ_RESULTS_DELAY = 0.32;
+
+const heroSpacer = `transition-[height] ${heroEase}`;
+
+/** Shared by the header and the content below it, so the two stay aligned. */
+const contentColumn = "w-full max-w-7xl mx-auto px-4 md:px-6";
 
 export interface SearchPageProps {
   initialQuery: string;
@@ -336,30 +376,56 @@ export function SearchPage({
   // Rank order has no date structure, so only group into a timeline by date.
   const grouped = resultsSort !== "relevance";
 
+  // The CSS half of the sequence opts out via `motion-reduce`, but Motion
+  // defaults to reducedMotion: "never" and would keep animating regardless.
+  // Without this the box would snap while the toolbar and results still ran —
+  // and a reader who asked for less motion would sit through the delays
+  // watching an empty page.
+  const reduceMotion = useReducedMotion();
+  const seq = (duration: number, delay = 0) =>
+    reduceMotion ? { duration: 0 } : { duration, delay, ease: heroEaseCurve };
+
   return (
     <div className="min-h-dvh bg-background">
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-8 pb-24 md:pb-28">
-        {/* Header */}
+      {/* Header. Above the spacer, so it stays put while the box travels. */}
+      <div className={`${contentColumn} pt-8`}>
         <div className="mb-6">
           <h1 className="font-serif text-3xl font-medium mb-1">Search</h1>
           <p className="text-sm text-muted">Every article, all dates.</p>
         </div>
+      </div>
 
-        {/* Search box */}
-        <SearchField
-          aria-label="Search articles"
-          className="w-full mb-4"
-          value={input}
-          onChange={setInput}
-          onClear={() => setInput("")}
-          autoFocus
+      {/* Holds the box down the page while there is nothing to show; the first
+          keystroke collapses it and the box rises to meet the header. */}
+      <div
+        aria-hidden
+        className={heroSpacer}
+        style={{ height: hasQuery ? 0 : HERO_OFFSET }}
+      />
+
+      <div className={`${contentColumn} pb-24 md:pb-28`}>
+        {/* Search box. Narrower while it sits low, full width once it rises.
+            Below 48rem the column is already the limit, so this is a no-op on
+            phones. */}
+        <div
+          className={`mx-auto w-full transition-[max-width] ${heroEase}`}
+          style={{ maxWidth: hasQuery ? HERO_WIDTH_TOP : HERO_WIDTH_LOW }}
         >
-          <SearchField.Group>
-            <SearchField.SearchIcon />
-            <SearchField.Input className="w-full" placeholder="Search articles" />
-            <SearchField.ClearButton />
-          </SearchField.Group>
-        </SearchField>
+          <SearchField
+            aria-label="Search articles"
+            className="w-full mb-4"
+            value={input}
+            onChange={setInput}
+            onClear={() => setInput("")}
+            autoFocus
+          >
+            <SearchField.Group>
+              <SearchField.SearchIcon />
+              <SearchField.Input className="w-full" placeholder="Search articles" />
+              <SearchField.ClearButton />
+            </SearchField.Group>
+          </SearchField>
+        </div>
 
         {/* Toolbar. Every control here narrows a result set, so it stays out of
             the way until there is one to narrow. Collapsing the height rather
@@ -372,9 +438,15 @@ export function SearchPage({
               // rings on the controls are not cut off.
               className={toolbarSettled ? undefined : "overflow-hidden"}
               initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+              // Waits for the box to have most of its travel done. On the way
+              // out it leaves at once: a reverse stagger on a dismissal just
+              // reads as lag.
+              animate={{
+                height: "auto",
+                opacity: 1,
+                transition: seq(0.22, SEQ_TOOLBAR_DELAY),
+              }}
+              exit={{ height: 0, opacity: 0, transition: seq(0.2) }}
               onAnimationStart={() => setToolbarSettled(false)}
               onAnimationComplete={() => setToolbarSettled(true)}
             >
@@ -486,32 +558,11 @@ export function SearchPage({
           )}
         </AnimatePresence>
 
-        {/* Result meta. Kept (dimmed) while a new search is in flight, so the
-            page doesn't reflow around the results it is about to replace. */}
-        {hasQuery && (results.length > 0 || !searching) && (
-          <div
-            className="mb-4"
-            style={{
-              opacity: searching ? 0.5 : 1,
-              transition: "opacity 0.15s ease",
-            }}
-          >
-            <p className="text-sm text-muted">
-              {total === 0
-                ? "No matches"
-                : `${total} article${total !== 1 ? "s" : ""} matching “${query.trim()}”`}
-            </p>
-            {mode === "fuzzy" && (
-              <p className="text-xs text-muted mt-1">
-                No exact matches — showing articles with similar titles.
-              </p>
-            )}
-          </div>
-        )}
-
         {/* Results */}
-        {!hasQuery ? (
-          <div className="py-16">
+        {!hasQuery && (
+          // The spacer above supplies the breathing room, so this only needs
+          // to sit clear of the search box.
+          <div className="pt-10">
             <p className="text-center text-sm text-muted">
               Every article in the archive — titles, summaries and full text.
             </p>
@@ -538,40 +589,81 @@ export function SearchPage({
               the closest headlines come back instead.
             </p>
           </div>
-        ) : !searching && results.length === 0 ? (
-          <p className="text-muted text-sm py-16 text-center">
-            Nothing found. Try fewer or different words.
-          </p>
-        ) : (
-          <>
-            <ArticleTimeline
-              articles={results}
-              view={view}
-              grouped={grouped}
-              fetching={searching}
-              sort={resultsSort}
-              renderExtra={(article) =>
-                article.snippet ? <SearchSnippet snippet={article.snippet} /> : null
-              }
-              renderTitle={(article) => {
-                const highlighted = titleHighlights.get(article.slug);
-                return highlighted ? (
-                  <HighlightedText text={highlighted} variant="title" />
-                ) : (
-                  article.title
-                );
-              }}
-            />
-
-            {!searching && rowsLoaded < total && (
-              <div className="flex justify-center mt-8">
-                <Button variant="ghost" onPress={loadMore} isDisabled={loadingMore}>
-                  {loadingMore ? "Loading..." : `Load more (${total - rowsLoaded} left)`}
-                </Button>
-              </div>
-            )}
-          </>
         )}
+
+        {/* Last in the sequence. `initial={false}` keeps a page that loaded
+            with ?q= already set from fading in results the server had already
+            rendered; only a mount after that first render animates. Staying
+            mounted across searches is what stops it re-fading on every
+            keystroke — it plays once, when the page comes alive. */}
+        <AnimatePresence initial={false}>
+          {hasQuery && (
+            <motion.div
+              key="results"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={seq(0.26, SEQ_RESULTS_DELAY)}
+            >
+              {/* Result meta. Kept (dimmed) while a new search is in flight,
+                  so the page doesn't reflow around the results it replaces. */}
+              {(results.length > 0 || !searching) && (
+                <div
+                  className="mb-4"
+                  style={{
+                    opacity: searching ? 0.5 : 1,
+                    transition: "opacity 0.15s ease",
+                  }}
+                >
+                  <p className="text-sm text-muted">
+                    {total === 0
+                      ? "No matches"
+                      : `${total} article${total !== 1 ? "s" : ""} matching “${query.trim()}”`}
+                  </p>
+                  {mode === "fuzzy" && (
+                    <p className="text-xs text-muted mt-1">
+                      No exact matches — showing articles with similar titles.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!searching && results.length === 0 ? (
+                <p className="text-muted text-sm py-16 text-center">
+                  Nothing found. Try fewer or different words.
+                </p>
+              ) : (
+                <>
+                  <ArticleTimeline
+                    articles={results}
+                    view={view}
+                    grouped={grouped}
+                    fetching={searching}
+                    sort={resultsSort}
+                    renderExtra={(article) =>
+                      article.snippet ? <SearchSnippet snippet={article.snippet} /> : null
+                    }
+                    renderTitle={(article) => {
+                      const highlighted = titleHighlights.get(article.slug);
+                      return highlighted ? (
+                        <HighlightedText text={highlighted} variant="title" />
+                      ) : (
+                        article.title
+                      );
+                    }}
+                  />
+
+                  {!searching && rowsLoaded < total && (
+                    <div className="flex justify-center mt-8">
+                      <Button variant="ghost" onPress={loadMore} isDisabled={loadingMore}>
+                        {loadingMore ? "Loading..." : `Load more (${total - rowsLoaded} left)`}
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
