@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Button,
   ListBox,
@@ -86,6 +87,9 @@ export function SearchPage({
   const [sort, setSort] = useState<SearchSortMode>(DEFAULT_SEARCH_SORT);
   const [view, setView] = useState<ViewMode>(initialView);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  // Starts true so a deep link with ?q= — which renders the toolbar without
+  // animating it in — is never clipped.
+  const [toolbarSettled, setToolbarSettled] = useState(true);
 
   const [results, setResults] = useState(initialResults);
   const [total, setTotal] = useState(initialTotal);
@@ -357,111 +361,130 @@ export function SearchPage({
           </SearchField.Group>
         </SearchField>
 
-        {/* Toolbar */}
-        <div className="flex items-center gap-2 mb-6">
-          <FeedFilter feed={feed} onFeedChange={setFeed} />
+        {/* Toolbar. Every control here narrows a result set, so it stays out of
+            the way until there is one to narrow. Collapsing the height rather
+            than swapping it out keeps the tips from jumping as it arrives. */}
+        <AnimatePresence initial={false}>
+          {hasQuery && (
+            <motion.div
+              key="toolbar"
+              // Clipped while the height animates; released afterwards so focus
+              // rings on the controls are not cut off.
+              className={toolbarSettled ? undefined : "overflow-hidden"}
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+              onAnimationStart={() => setToolbarSettled(false)}
+              onAnimationComplete={() => setToolbarSettled(true)}
+            >
+              <div className="flex items-center gap-2 pb-6">
+                <FeedFilter feed={feed} onFeedChange={setFeed} />
 
-          <div className="flex-1" />
+                <div className="flex-1" />
 
-          {/* Desktop controls, inline as on the home feed */}
-          <div className="hidden md:flex items-center gap-2">
-            {/* Date range */}
-            {dateBounds && (
-              <Popover.Root isOpen={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                <Popover.Trigger>
-                  <button
-                    className={`px-3 py-1.5 text-sm rounded-full border transition-colors inline-flex items-center gap-1.5 ${
-                      range
-                        ? "border-accent bg-accent/10 text-accent"
-                        : "border-border text-muted hover:border-accent/40 hover:text-foreground"
-                    }`}
+                {/* Desktop controls, inline as on the home feed */}
+                <div className="hidden md:flex items-center gap-2">
+                  {/* Date range */}
+                  {dateBounds && (
+                    <Popover.Root isOpen={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                      <Popover.Trigger>
+                        <button
+                          className={`px-3 py-1.5 text-sm rounded-full border transition-colors inline-flex items-center gap-1.5 ${
+                            range
+                              ? "border-accent bg-accent/10 text-accent"
+                              : "border-border text-muted hover:border-accent/40 hover:text-foreground"
+                          }`}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                            <line x1="16" y1="2" x2="16" y2="6" />
+                            <line x1="8" y1="2" x2="8" y2="6" />
+                            <line x1="3" y1="10" x2="21" y2="10" />
+                          </svg>
+                          {rangeLabel ?? "All time"}
+                        </button>
+                      </Popover.Trigger>
+                      <Popover.Content>
+                        <Popover.Dialog>
+                          {renderDateRangePanel(() => setIsCalendarOpen(false))}
+                        </Popover.Dialog>
+                      </Popover.Content>
+                    </Popover.Root>
+                  )}
+
+                  <Select
+                    aria-label="Sort results"
+                    selectedKey={sort}
+                    onSelectionChange={(key) => setSort(key as SearchSortMode)}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                      <line x1="16" y1="2" x2="16" y2="6" />
-                      <line x1="8" y1="2" x2="8" y2="6" />
-                      <line x1="3" y1="10" x2="21" y2="10" />
-                    </svg>
-                    {rangeLabel ?? "All time"}
-                  </button>
-                </Popover.Trigger>
-                <Popover.Content>
-                  <Popover.Dialog>
-                    {renderDateRangePanel(() => setIsCalendarOpen(false))}
-                  </Popover.Dialog>
-                </Popover.Content>
-              </Popover.Root>
-            )}
+                    <Select.Trigger className="min-w-[110px] md:min-w-[140px]">
+                      <Select.Value />
+                      <Select.Indicator />
+                    </Select.Trigger>
+                    <Select.Popover>
+                      <ListBox>
+                        {sortOptions.map((opt) => (
+                          <ListBoxItem key={opt.value} id={opt.value} textValue={opt.label}>
+                            {opt.label}
+                          </ListBoxItem>
+                        ))}
+                      </ListBox>
+                    </Select.Popover>
+                  </Select>
 
-            <Select
-              aria-label="Sort results"
-              selectedKey={sort}
-              onSelectionChange={(key) => setSort(key as SearchSortMode)}
-            >
-              <Select.Trigger className="min-w-[110px] md:min-w-[140px]">
-                <Select.Value />
-                <Select.Indicator />
-              </Select.Trigger>
-              <Select.Popover>
-                <ListBox>
-                  {sortOptions.map((opt) => (
-                    <ListBoxItem key={opt.value} id={opt.value} textValue={opt.label}>
-                      {opt.label}
-                    </ListBoxItem>
-                  ))}
-                </ListBox>
-              </Select.Popover>
-            </Select>
-
-            <ToggleButtonGroup
-              selectionMode="single"
-              selectedKeys={new Set([view])}
-              onSelectionChange={(keys) => {
-                const selected = [...keys][0] as ViewMode | undefined;
-                if (selected) handleViewChange(selected);
-              }}
-            >
-              <ToggleButton id="grid" aria-label="Grid view">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
-                  <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
-                  <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
-                  <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
-                </svg>
-              </ToggleButton>
-              <ToggleButton id="list" aria-label="List view">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <line x1="1" y1="3" x2="15" y2="3" />
-                  <line x1="1" y1="8" x2="15" y2="8" />
-                  <line x1="1" y1="13" x2="15" y2="13" />
-                </svg>
-              </ToggleButton>
-            </ToggleButtonGroup>
-          </div>
-
-          {/* Mobile: same settings drawer as the home feed, plus date range */}
-          <MobileSettings
-            sort={sort}
-            onSortChange={setSort}
-            sortLabels={sortOptions}
-            view={view}
-            onViewChange={handleViewChange}
-          >
-            {(close) =>
-              dateBounds && (
-                <div>
-                  <div className="flex items-baseline justify-between gap-3 mb-3">
-                    <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
-                      Date range
-                    </h3>
-                    <span className="text-sm text-muted">{rangeLabel ?? "All time"}</span>
-                  </div>
-                  {renderDateRangePanel(close)}
+                  <ToggleButtonGroup
+                    selectionMode="single"
+                    selectedKeys={new Set([view])}
+                    onSelectionChange={(keys) => {
+                      const selected = [...keys][0] as ViewMode | undefined;
+                      if (selected) handleViewChange(selected);
+                    }}
+                  >
+                    <ToggleButton id="grid" aria-label="Grid view">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
+                        <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
+                        <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
+                        <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
+                      </svg>
+                    </ToggleButton>
+                    <ToggleButton id="list" aria-label="List view">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <line x1="1" y1="3" x2="15" y2="3" />
+                        <line x1="1" y1="8" x2="15" y2="8" />
+                        <line x1="1" y1="13" x2="15" y2="13" />
+                      </svg>
+                    </ToggleButton>
+                  </ToggleButtonGroup>
                 </div>
-              )
-            }
-          </MobileSettings>
-        </div>
+
+                {/* Mobile: same settings drawer as the home feed, plus date range */}
+                <MobileSettings
+                  sort={sort}
+                  onSortChange={setSort}
+                  sortLabels={sortOptions}
+                  view={view}
+                  onViewChange={handleViewChange}
+                >
+                  {(close) =>
+                    dateBounds && (
+                      <div>
+                        <div className="flex items-baseline justify-between gap-3 mb-3">
+                          <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
+                            Date range
+                          </h3>
+                          <span className="text-sm text-muted">{rangeLabel ?? "All time"}</span>
+                        </div>
+                        {renderDateRangePanel(close)}
+                      </div>
+                    )
+                  }
+                </MobileSettings>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Result meta. Kept (dimmed) while a new search is in flight, so the
             page doesn't reflow around the results it is about to replace. */}
