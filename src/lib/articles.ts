@@ -1,4 +1,5 @@
 import slugify from "slugify";
+import { createHash } from "node:crypto";
 import type { RawArticle, Article } from "./types";
 
 export function extractDomain(url: string): string {
@@ -36,20 +37,25 @@ export function extractSourceId(url: string): string {
   }
 }
 
-export function makeSlug(title: string, domain?: string, feed?: string): string {
-  const base = slugify(title, { lower: true, strict: true }).slice(0, 100);
-  const parts = [base];
-  if (feed) parts.push(feed);
-  if (domain) parts.push(domain.replace(/\./g, "-"));
-  return parts.join("-").slice(0, 150);
+// Short, stable, effectively-unique suffix from the article's source id.
+// Same sourceId → same suffix; sourceId is already unique-indexed, so distinct
+// articles get distinct suffixes even when titles are identical. 10 hex chars
+// (~40 bits) gives ample collision headroom at news-app volume.
+function slugHash(sourceId: string): string {
+  return createHash("sha1").update(sourceId).digest("hex").slice(0, 10);
+}
+
+export function makeSlug(title: string, sourceId: string): string {
+  const base = slugify(title, { lower: true, strict: true }).slice(0, 80);
+  const suffix = slugHash(sourceId);
+  return base ? `${base}-${suffix}` : `article-${suffix}`;
 }
 
 export function buildArticle(
   rawArticle: RawArticle,
   clippedContent: string | null
 ): { article: Article; content: string } {
-  const domain = extractDomain(rawArticle.sourceUrl);
-  const slug = makeSlug(rawArticle.title, domain, rawArticle.feed);
+  const slug = makeSlug(rawArticle.title, rawArticle.sourceId);
 
   const isHNDiscussion = rawArticle.sourceUrl.includes("news.ycombinator.com/item");
   const content = clippedContent

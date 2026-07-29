@@ -13,7 +13,6 @@ import { buildArticle } from "./articles";
 import { insertArticle, getExistingArticles, updateArticleMetadata, matchStories, updateRelevanceScore } from "./db/queries";
 import { scoreArticle } from "./scorer";
 import { extractAndLinkForArticle } from "./extractor";
-import { extractDomain, makeSlug } from "./articles";
 import type { RawArticle, PipelineResult } from "./types";
 
 const MAX_CONCURRENT = 3;
@@ -218,15 +217,15 @@ export async function runFetchPipeline(options?: {
       console.log(`[pipeline] Scored ${scored}/${scoreTargets.length} articles`);
     }
 
-    // Extract entities and topics for newly inserted articles.
-    if (newArticles.length > 0) {
-      const slugsToExtract = newArticles.map((a) =>
-        makeSlug(a.title, extractDomain(a.sourceUrl), a.feed)
-      );
-
-      console.log(`[pipeline] Extracting entities/topics for ${slugsToExtract.length} articles...`);
+    // Extract entities and topics for newly inserted articles. Reuse the slugs
+    // actually written to the DB (scoreTargets) rather than recomputing them —
+    // this skips duplicates that failed to insert and stays correct even if
+    // slug generation changes.
+    const insertedSlugs = scoreTargets.map((t) => t.slug);
+    if (insertedSlugs.length > 0) {
+      console.log(`[pipeline] Extracting entities/topics for ${insertedSlugs.length} articles...`);
       let extracted = 0;
-      await processInBatches(slugsToExtract, MAX_CONCURRENT, async (slug) => {
+      await processInBatches(insertedSlugs, MAX_CONCURRENT, async (slug) => {
         try {
           const success = await extractAndLinkForArticle(slug);
           if (success) extracted++;
@@ -234,7 +233,7 @@ export async function runFetchPipeline(options?: {
           console.error(`[pipeline] Extraction failed for ${slug}:`, err);
         }
       });
-      console.log(`[pipeline] Extracted entities/topics for ${extracted}/${slugsToExtract.length} articles`);
+      console.log(`[pipeline] Extracted entities/topics for ${extracted}/${insertedSlugs.length} articles`);
     }
 
     console.log(
