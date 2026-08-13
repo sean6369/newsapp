@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { FloatingDock } from "@/components/FloatingDock";
-import { Home, TrendingUp, Search } from "lucide-react";
+import { Home, TrendingUp, Search, Sparkles } from "lucide-react";
 
 const navItems = [
   {
@@ -19,6 +19,11 @@ const navItems = [
     title: "Search",
     icon: <Search className="h-full w-full text-foreground" />,
     href: "/search",
+  },
+  {
+    title: "Ask",
+    icon: <Sparkles className="h-full w-full text-foreground" />,
+    href: "/ask",
   },
 ];
 

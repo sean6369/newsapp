@@ -12,7 +12,12 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ slug, onClose }: ChatPanelProps) {
-  const { messages, sendMessage, isStreaming, isSearching, error, clearMessages } = useChat(slug);
+  const { messages, sendMessage, isStreaming, isSearching, error, clearMessages } = useChat({
+    endpoint: "/api/chat",
+    body: slug.startsWith("storyline:")
+      ? { storylineId: slug.slice("storyline:".length) }
+      : { slug },
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

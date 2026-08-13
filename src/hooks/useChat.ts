@@ -1,7 +1,16 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
-import type { ChatMessage } from "@/lib/types";
+import { useState, useCallback, useEffect, useRef } from "react";
+import type { AskStep, ChatMessage, RetrievedArticleRef } from "@/lib/types";
+
+interface UseChatOptions {
+  /** Where to POST. `/api/chat` for one article, `/api/ask` for the archive. */
+  endpoint: string;
+  /** Extra fields merged into the request body alongside `messages`. */
+  body?: Record<string, unknown>;
+  /** Restores a prior conversation, e.g. from sessionStorage. */
+  initialMessages?: ChatMessage[];
+}
 
 interface UseChatReturn {
   messages: ChatMessage[];
@@ -21,13 +30,25 @@ const QUEUE_PRESSURE_THRESHOLD = 100; // chars in queue before speeding up
 let msgIdCounter = 0;
 const nextMsgId = () => `msg-${++msgIdCounter}`;
 
-export function useChat(identifier: string): UseChatReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export function useChat({
+  endpoint,
+  body,
+  initialMessages,
+}: UseChatOptions): UseChatReturn {
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? []);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const pendingSourcesRef = useRef<ChatMessage["sources"]>(undefined);
+
+  // Held in a ref so a caller passing an object literal — the normal way to
+  // write `body={{ slug }}` — does not give `sendMessage` a new identity on
+  // every render.
+  const bodyRef = useRef(body);
+  useEffect(() => {
+    bodyRef.current = body;
+  });
 
   // Token queue refs
   const queueRef = useRef("");
@@ -90,6 +111,20 @@ export function useChat(identifier: string): UseChatReturn {
     [flushQueue]
   );
 
+  /** Merges fields into the in-flight assistant message, which is always last. */
+  const appendToAssistant = useCallback(
+    (update: (last: ChatMessage) => Partial<ChatMessage>) => {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role !== "assistant") return prev;
+        updated[updated.length - 1] = { ...last, ...update(last) };
+        return updated;
+      });
+    },
+    []
+  );
+
   // Wait for the queue to fully drain, then resolve
   const waitForDrain = useCallback((): Promise<void> => {
     return new Promise((resolve) => {
@@ -126,15 +161,10 @@ export function useChat(identifier: string): UseChatReturn {
           content: m.content,
         }));
 
-        const response = await fetch("/api/chat", {
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...(identifier.startsWith("storyline:")
-              ? { storylineId: identifier.slice("storyline:".length) }
-              : { slug: identifier }),
-            messages: allMessages,
-          }),
+          body: JSON.stringify({ ...bodyRef.current, messages: allMessages }),
           signal: abortRef.current.signal,
         });
 
@@ -170,6 +200,25 @@ export function useChat(identifier: string): UseChatReturn {
               }
               if (parsed.sources) {
                 pendingSourcesRef.current = parsed.sources;
+              }
+              // Retrieval steps and their articles bypass the token queue.
+              // They describe work already done, and holding them behind the
+              // drip would show the reader an answer citing articles whose
+              // cards had not appeared yet.
+              if (parsed.step) {
+                setIsSearching(false);
+                appendToAssistant((last) => ({
+                  steps: [...(last.steps ?? []), parsed.step as AskStep],
+                }));
+              }
+              if (parsed.articles) {
+                appendToAssistant((last) => {
+                  const seen = new Set((last.articles ?? []).map((a) => a.slug));
+                  const fresh = (parsed.articles as RetrievedArticleRef[]).filter(
+                    (a) => !seen.has(a.slug)
+                  );
+                  return { articles: [...(last.articles ?? []), ...fresh] };
+                });
               }
               if (parsed.text) {
                 setIsSearching(false);
@@ -217,7 +266,7 @@ export function useChat(identifier: string): UseChatReturn {
         abortRef.current = null;
       }
     },
-    [identifier, messages, isStreaming, enqueueTokens, waitForDrain]
+    [endpoint, messages, isStreaming, enqueueTokens, waitForDrain, appendToAssistant]
   );
 
   const clearMessages = useCallback(() => {
