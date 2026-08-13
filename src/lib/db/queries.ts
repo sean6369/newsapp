@@ -2,7 +2,7 @@ import { eq, ne, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle
 import { db } from "./index";
 import { articles, storylines, storylineArticles } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
-import type { Article, ArticleFilters, SearchFilters, SearchResponse, SearchResultArticle } from "../types";
+import type { Article, ArticleFilters, FeedType, SearchFilters, SearchResponse, SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
 
 const articleColumns = {
@@ -737,4 +737,112 @@ export async function getStorylineById(id: number): Promise<{
     fullStory: row.fullStory,
     articles: articleRows.map((r) => rowToArticle(r)),
   };
+}
+
+// ── Hybrid retrieval (semantic + lexical) ─────────────────────────────
+
+/**
+ * Candidates drawn from each arm before fusion. Generous relative to the
+ * handful finally returned: fusion can only reward an article both arms found,
+ * so a pool too small to overlap collapses RRF back into two separate lists.
+ */
+const RETRIEVAL_POOL = 60;
+
+/**
+ * The `k` in `1/(k + rank)`. 60 is the value from the original RRF paper and
+ * is deliberately large relative to the pool: it flattens the curve so the
+ * exact ordering *within* an arm matters less than whether both arms surfaced
+ * the article at all, which is the property that makes fusion robust without
+ * per-arm score normalisation.
+ */
+const RRF_K = 60;
+
+export type RetrievalRow = {
+  slug: string;
+  title: string;
+  summary: string;
+  date: string;
+  source_domain: string;
+  feed: string;
+  story_group: string | null;
+  score: number;
+  lex_rank: number | null;
+  vec_rank: number | null;
+};
+
+/**
+ * Retrieves articles by fusing full-text and vector search with Reciprocal
+ * Rank Fusion.
+ *
+ * The two arms fail in opposite directions, which is the reason for running
+ * both. Lexical search is precise on the proper nouns news is dense with
+ * ("Nvidia", "H20") but blind to paraphrase; vector search reads through
+ * "semiconductor curbs" to "chip export restrictions" but smears exact names.
+ * RRF combines them on rank rather than score, so there are no incomparable
+ * scales to normalise and no weights to tune.
+ *
+ * Unlike `searchArticles`, an unparseable or stop-word-only query is not fatal
+ * here — the lexical arm simply contributes nothing and the semantic arm still
+ * answers, which matters when the caller is a model writing its own queries.
+ */
+export async function hybridSearchArticles(params: {
+  query: string;
+  /** Null degrades this to lexical-only; see the `vecArm` note below. */
+  embedding: number[] | null;
+  feed?: FeedType | "all";
+  from?: string;
+  to?: string;
+  limit: number;
+}): Promise<RetrievalRow[]> {
+  const { query, embedding, feed, from, to, limit } = params;
+
+  const feedFilter = feed && feed !== "all" ? sql` AND a.feed = ${feed}` : sql``;
+  const fromFilter = from ? sql` AND a.date >= ${from}` : sql``;
+  const toFilter = to ? sql` AND a.date <= ${to}` : sql``;
+  const scopeFilter = sql`${feedFilter}${fromFilter}${toFilter}`;
+
+  // The semantic arm, or an empty stand-in shaped like it.
+  //
+  // Embedding a question is a network call against a daily-capped free tier,
+  // so "no vector today" is a state this has to survive. An arm that yields no
+  // rows leaves RRF summing a single term, which degrades the ranking to plain
+  // full-text rather than failing the retrieval. `WHERE false` keeps the
+  // column types identical so the FULL OUTER JOIN below still type-checks.
+  const vecArm = embedding
+    ? sql`
+        SELECT slug, ROW_NUMBER() OVER (ORDER BY d ASC, date DESC) AS rank
+        FROM (
+          SELECT a.slug, a.embedding <=> ${sql`${JSON.stringify(embedding)}::vector`} AS d, a.date
+          FROM articles a
+          WHERE a.embedding IS NOT NULL${scopeFilter}
+          ORDER BY d ASC
+          LIMIT ${RETRIEVAL_POOL}
+        ) t`
+    : sql`SELECT a.slug, ROW_NUMBER() OVER () AS rank FROM articles a WHERE false`;
+
+  return (await db.execute(sql`
+    WITH q AS (SELECT websearch_to_tsquery('english', ${query}) AS tsq),
+    lex AS (
+      SELECT slug, ROW_NUMBER() OVER (ORDER BY r DESC, date DESC) AS rank
+      FROM (
+        SELECT a.slug, ts_rank_cd(a.search_vector, q.tsq) AS r, a.date
+        FROM articles a CROSS JOIN q
+        WHERE a.search_vector @@ q.tsq${scopeFilter}
+        ORDER BY r DESC, a.date DESC
+        LIMIT ${RETRIEVAL_POOL}
+      ) t
+    ),
+    vec AS (${vecArm})
+    SELECT a.slug, a.title, a.summary, a.date, a.source_domain, a.feed,
+      a.story_group,
+      (COALESCE(1.0 / (${RRF_K} + lex.rank), 0)
+        + COALESCE(1.0 / (${RRF_K} + vec.rank), 0))::real AS score,
+      lex.rank::int AS lex_rank,
+      vec.rank::int AS vec_rank
+    FROM lex
+    FULL OUTER JOIN vec USING (slug)
+    JOIN articles a USING (slug)
+    ORDER BY score DESC, a.date DESC
+    LIMIT ${limit}
+  `)) as unknown as RetrievalRow[];
 }
