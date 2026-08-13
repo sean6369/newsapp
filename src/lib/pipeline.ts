@@ -210,7 +210,7 @@ export async function runFetchPipeline(options?: {
 
   // Phase 2: relevance scoring. Deferred so the caller can
   // run it after sending the response (HTTP route) or inline (scheduler).
-  const finalize = async () => {
+  const runFinalize = async () => {
     // Score inserted articles in a throttled pass. scoreArticle self-limits to
     // the Gemini free-tier quota (15 req/min); failures leave relevance_score
     // null (set at insert) for the next backfill run to retry.
@@ -252,5 +252,71 @@ export async function runFetchPipeline(options?: {
     );
   };
 
+  // When a run is shared (see `getOrStartFetchPipeline`) both callers hold this
+  // same `finalize`, and they consume it differently: the route schedules it
+  // via `after()` while the scheduler awaits it inline. Memoising the promise
+  // rather than an "already ran" flag matters — a flag would let the second
+  // caller return immediately and report the run complete while scoring and
+  // embedding were still going.
+  let finalizePromise: Promise<void> | null = null;
+  const finalize = () => (finalizePromise ??= runFinalize());
+
   return { result, finalize };
+}
+
+export type PipelineRun = Awaited<ReturnType<typeof runFetchPipeline>>;
+
+/**
+ * In-flight phase-1 runs, keyed by target date.
+ *
+ * Two things trigger the pipeline — the hourly cron and a fresh load of the
+ * feed page (`Feed.tsx` fires `/api/fetch` on first mount, and a refresh
+ * counts as a fresh mount) — so overlapping runs are ordinary, not an edge
+ * case. They stay *correct* on their own: inserts dedupe on `source_id` and
+ * unique constraints turn races into a logged duplicate. What they waste is
+ * a second pass over nine feeds, a second round of clipping aimed at the same
+ * source sites, and a second `matchStories()`.
+ *
+ * Per-process, so this would not survive being scaled to multiple replicas.
+ */
+const inFlight = new Map<string, Promise<PipelineRun>>();
+
+/**
+ * Joins the in-flight fetch for a date if one is running, otherwise starts it.
+ *
+ * Kept separate from `runFetchPipeline` so the sharing is visible where it is
+ * used: a function that silently returned someone else's run — ignoring the
+ * arguments it was handed — would be a trap for the next caller.
+ *
+ * The entry clears when phase 1 resolves, not when `finalize` does. That
+ * releases the slot before the multi-minute scoring tail, which is both
+ * necessary (holding it would stall the next hourly run) and safe: a later run
+ * finds these articles already inserted, so its own `scoreTargets` is empty
+ * and it never re-scores them.
+ */
+export function getOrStartFetchPipeline(options?: {
+  date?: string;
+}): Promise<PipelineRun> {
+  // Resolved here and passed down, so the map key and the run it guards can
+  // never disagree about which day is being fetched.
+  const targetDate = options?.date || format(new Date(), "yyyy-MM-dd");
+
+  const existing = inFlight.get(targetDate);
+  if (existing) {
+    console.log(`[pipeline] Joining in-flight fetch for ${targetDate}`);
+    return existing;
+  }
+
+  const run = runFetchPipeline({ date: targetDate });
+  inFlight.set(targetDate, run);
+
+  // Cleanup gets its own handled branch; the caller still sees the rejection.
+  // The identity check keeps a slow failure from evicting a newer run.
+  run
+    .catch(() => {})
+    .finally(() => {
+      if (inFlight.get(targetDate) === run) inFlight.delete(targetDate);
+    });
+
+  return run;
 }
