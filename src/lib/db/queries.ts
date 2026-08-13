@@ -846,3 +846,25 @@ export async function hybridSearchArticles(params: {
     LIMIT ${limit}
   `)) as unknown as RetrievalRow[];
 }
+
+/**
+ * What the archive actually covers, for the AI reader's system prompt.
+ *
+ * Without it the model has no idea whether silence on a topic means the
+ * archive lacks it or simply predates it, and no way to tell the reader that
+ * the most recent article it found is already a week old.
+ */
+export async function getCorpusCoverage(): Promise<{
+  earliest: string;
+  latest: string;
+  total: number;
+} | null> {
+  const rows = (await db.execute(sql`
+    SELECT MIN(date) AS earliest, MAX(date) AS latest, COUNT(*)::int AS total
+    FROM articles
+  `)) as unknown as Array<{ earliest: string | null; latest: string | null; total: number }>;
+
+  const row = rows[0];
+  if (!row?.earliest || !row.latest) return null;
+  return { earliest: row.earliest, latest: row.latest, total: row.total };
+}

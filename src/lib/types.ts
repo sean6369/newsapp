@@ -38,11 +38,42 @@ export interface SearchSource {
   url: string;
 }
 
+/**
+ * One retrieval the model performed, surfaced so the page can show its
+ * working. A dedicated page has room to show what was searched and what came
+ * back, which is the difference between a chatbot bolted on and something
+ * that reads as part of the app.
+ */
+export interface AskStep {
+  tool: "search_articles" | "get_article";
+  /** Human-readable: the query and hit count, or the article title. */
+  detail: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: SearchSource[];
+  /** Archive searches behind this reply, in the order they ran. */
+  steps?: AskStep[];
+  /** Archive articles the reply drew on, for rendering as cards. */
+  articles?: RetrievedArticleRef[];
+}
+
+/**
+ * The subset of a retrieved article the client renders. Mirrors
+ * `RetrievedArticle` in `lib/retrieval` without importing it, so the types
+ * module stays free of server-only dependencies.
+ */
+export interface RetrievedArticleRef {
+  slug: string;
+  title: string;
+  summary: string;
+  date: string;
+  sourceDomain: string;
+  feed: string;
+  alsoReportedBy: string[];
 }
 
 export interface ArticleFilters {
