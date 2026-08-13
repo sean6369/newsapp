@@ -9,11 +9,12 @@ import {
   ListBoxItem,
   Popover,
   RangeCalendar,
-  SearchField,
   Select,
   ToggleButton,
   ToggleButtonGroup,
 } from "@heroui/react";
+import { Search as SearchIcon, X } from "lucide-react";
+import { PromptField, PromptFieldButton } from "./PromptField";
 import { parseDate } from "@internationalized/date";
 import type { DateValue } from "@internationalized/date";
 import type {
@@ -28,6 +29,15 @@ import { FeedFilter, MobileSettings } from "./FeedFilter";
 import { SEARCH_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
 import { SearchSnippet, HighlightedText } from "./SearchSnippet";
 import type { ViewMode } from "./ArticleGrid";
+import {
+  HERO_OFFSET,
+  HERO_WIDTH_LOW,
+  HERO_WIDTH_TOP,
+  heroEase,
+  heroEaseCurve,
+  heroSpacer,
+  contentColumn,
+} from "./hero-shared";
 
 const sortOptions: Array<{ value: SearchSortMode; label: string }> = [
   { value: "relevance", label: "Best match" },
@@ -50,33 +60,6 @@ interface DateRange {
   end: string;
 }
 
-// How far the search box sits below the header while the page is empty, and
-// therefore exactly how far it travels. An explicit length rather than flex
-// centring: the results mount in the same frame the box starts moving, and
-// anything derived from content height gets yanked out from under the
-// animation as they do.
-//
-// svh, not dvh. The empty page is tall enough to scroll on a phone, and
-// scrolling retracts the browser's URL bar — which changes dvh, which would
-// re-run the transition below and drift the box under the reader's thumb.
-// svh is pinned to the URL-bar-visible height and never moves.
-const HERO_OFFSET = "20svh";
-
-// Sitting low, the box pulls in off the full content column, which at 80rem
-// reads as a page banner rather than something to type into. Both ends are
-// concrete lengths because `none` would not interpolate.
-const HERO_WIDTH_LOW = "48rem";
-/** The content column's own max-w-7xl, i.e. no visible constraint. */
-const HERO_WIDTH_TOP = "80rem";
-
-// The same curve twice: the box moves on a CSS transition, the toolbar and
-// results on Motion, and they have to agree or the sequence stops reading as
-// one gesture. The delays below are measured against the 400ms here too, so
-// changing that duration means revisiting them.
-const heroEase =
-  "duration-[400ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] motion-reduce:transition-none";
-const heroEaseCurve: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
-
 // The empty page comes back to life in one order: the box rises and widens,
 // the toolbar unrolls under it, then the results arrive. Each starts while the
 // one above it is still moving — a clean gap between them reads as three
@@ -84,11 +67,6 @@ const heroEaseCurve: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
 // own 400ms.
 const SEQ_TOOLBAR_DELAY = 0.18;
 const SEQ_RESULTS_DELAY = 0.32;
-
-const heroSpacer = `transition-[height] ${heroEase}`;
-
-/** Shared by the header and the content below it, so the two stay aligned. */
-const contentColumn = "w-full max-w-7xl mx-auto px-4 md:px-6";
 
 export interface SearchPageProps {
   initialQuery: string;
@@ -411,20 +389,27 @@ export function SearchPage({
           className={`mx-auto w-full transition-[max-width] ${heroEase}`}
           style={{ maxWidth: hasQuery ? HERO_WIDTH_TOP : HERO_WIDTH_LOW }}
         >
-          <SearchField
-            aria-label="Search articles"
-            className="w-full mb-4"
+          {/* InputGroup rather than SearchField so this and the Ask composer
+              are literally the same shell — HeroUI gives both the same field
+              tokens, but only sharing the primitive keeps them that way. The
+              leading icon is the deliberate difference between the two. */}
+          <PromptField
+            className="mb-4"
             value={input}
             onChange={setInput}
-            onClear={() => setInput("")}
+            onEscape={() => setInput("")}
+            placeholder="Search articles"
+            ariaLabel="Search articles"
             autoFocus
-          >
-            <SearchField.Group>
-              <SearchField.SearchIcon />
-              <SearchField.Input className="w-full" placeholder="Search articles" />
-              <SearchField.ClearButton />
-            </SearchField.Group>
-          </SearchField>
+            icon={<SearchIcon className="h-4 w-4 text-muted" aria-hidden />}
+            trailing={
+              input ? (
+                <PromptFieldButton onPress={() => setInput("")} label="Clear search">
+                  <X className="h-4 w-4" aria-hidden />
+                </PromptFieldButton>
+              ) : null
+            }
+          />
         </div>
 
         {/* Toolbar. Every control here narrows a result set, so it stays out of
