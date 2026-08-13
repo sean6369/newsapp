@@ -2,6 +2,8 @@
 
 import dynamic from "next/dynamic";
 
+import { contentColumn } from "./hero-shared";
+
 /**
  * Loads the Ask page on the client only.
  *
@@ -13,8 +15,13 @@ import dynamic from "next/dynamic";
  */
 const AskPage = dynamic(() => import("./AskPage").then((m) => m.AskPage), {
   ssr: false,
-  // Reserves the mounted layout so the page does not shift as it loads.
-  loading: () => <div className="mx-auto min-h-svh w-full max-w-3xl px-5 pt-16" />,
+  // Reserves the mounted page's frame so nothing shifts as it loads — same
+  // wrapper and same top padding the real header uses.
+  loading: () => (
+    <div className="min-h-dvh bg-background">
+      <div className={`${contentColumn} pt-8`} />
+    </div>
+  ),
 });
 
 export function AskLoader() {

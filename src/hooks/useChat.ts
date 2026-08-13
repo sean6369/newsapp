@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { AskStep, ChatMessage, RetrievedArticleRef } from "@/lib/types";
+import type { AskStep, ChatMessage, RetrievedArticle } from "@/lib/types";
 
 interface UseChatOptions {
   /** Where to POST. `/api/chat` for one article, `/api/ask` for the archive. */
@@ -214,7 +214,7 @@ export function useChat({
               if (parsed.articles) {
                 appendToAssistant((last) => {
                   const seen = new Set((last.articles ?? []).map((a) => a.slug));
-                  const fresh = (parsed.articles as RetrievedArticleRef[]).filter(
+                  const fresh = (parsed.articles as RetrievedArticle[]).filter(
                     (a) => !seen.has(a.slug)
                   );
                   return { articles: [...(last.articles ?? []), ...fresh] };

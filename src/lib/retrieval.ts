@@ -1,6 +1,6 @@
 import { hybridSearchArticles, type RetrievalRow } from "./db/queries";
 import { embedQuery } from "./embeddings";
-import type { FeedType } from "./types";
+import type { FeedType, RetrievedArticle } from "./types";
 
 /**
  * Retrieval for the AI reader.
@@ -34,16 +34,7 @@ const MAX_CHARS = 12_000;
  */
 const MAX_SUMMARY_CHARS = 400;
 
-export interface RetrievedArticle {
-  slug: string;
-  title: string;
-  summary: string;
-  date: string;
-  sourceDomain: string;
-  feed: string;
-  /** Other outlets that ran the same story, collapsed into this entry. */
-  alsoReportedBy: string[];
-}
+export type { RetrievedArticle };
 
 export interface RetrievalParams {
   query: string;

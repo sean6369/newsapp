@@ -69,15 +69,37 @@ export async function POST(request: NextRequest) {
       // Searches overlap heavily — the same article surfaces for several
       // phrasings — so slugs already sent are not sent again.
       const sentArticles = new Set<string>();
+      /**
+       * Results keyed by tool + arguments, for the life of one reply.
+       *
+       * The model repeats itself — sometimes twice in a single turn, issuing
+       * two identical `search_articles` calls in parallel, sometimes again a
+       * turn later. Every repeat used to run the query again, cost another
+       * embedding against a 1,000-a-day allowance, and show the reader the
+       * same search twice.
+       *
+       * The call still has to be *answered* each time: the API pairs one
+       * `function_call_output` to every `call_id`, so what is reused is the
+       * result, not the reply.
+       */
+      const toolResults = new Map<string, Awaited<ReturnType<typeof executeAskTool>>>();
       let toolCalls = 0;
 
       try {
+        // Whether a turn produced prose rather than another tool request. The
+        // loop can otherwise run out of turns mid-investigation and close the
+        // stream having sent retrieval steps and no reply at all.
+        let answered = false;
+
         for (let turn = 0; turn < MAX_TURNS; turn++) {
           const withinBudget = toolCalls < MAX_TOOL_CALLS;
           const output = await streamTurn(input, send, sources, withinBudget);
 
           // Tools were withheld, so this turn is the answer by construction.
-          if (!withinBudget) break;
+          if (!withinBudget) {
+            answered = true;
+            break;
+          }
 
           // Everything the turn produced goes back verbatim, reasoning items
           // included — dropping those costs the model its chain of thought
@@ -90,19 +112,30 @@ export async function POST(request: NextRequest) {
           );
 
           // No tool requested means the model answered; the reply is complete.
-          if (calls.length === 0) break;
+          if (calls.length === 0) {
+            answered = true;
+            break;
+          }
 
           for (const call of calls) {
-            const result = await executeAskTool(call.name, call.arguments ?? "{}");
-            toolCalls++;
+            const key = `${call.name}:${call.arguments ?? ""}`;
+            const cached = toolResults.get(key);
+            const result = cached ?? (await executeAskTool(call.name, call.arguments ?? "{}"));
 
-            const fresh = (result.articles ?? []).filter((a) => !sentArticles.has(a.slug));
-            for (const a of fresh) sentArticles.add(a.slug);
+            // A repeat costs nothing to serve, so it does not spend budget and
+            // is not shown again — the reader saw that search the first time.
+            if (!cached) {
+              toolResults.set(key, result);
+              toolCalls++;
 
-            send({
-              step: { tool: call.name, detail: result.detail },
-              ...(fresh.length ? { articles: fresh } : {}),
-            });
+              const fresh = (result.articles ?? []).filter((a) => !sentArticles.has(a.slug));
+              for (const a of fresh) sentArticles.add(a.slug);
+
+              send({
+                step: { tool: call.name, detail: result.detail },
+                ...(fresh.length ? { articles: fresh } : {}),
+              });
+            }
 
             input.push({
               type: "function_call_output",
@@ -110,10 +143,14 @@ export async function POST(request: NextRequest) {
               output: result.output,
             });
           }
+        }
 
-          if (turn === MAX_TURNS - 1) {
-            console.warn("[ask] Turn limit reached with tools still pending");
-          }
+        // Ran out of turns while the model was still calling tools. One more
+        // pass with tool_choice "none" turns what it has gathered into a
+        // reply, rather than leaving the reader a list of searches and silence.
+        if (!answered) {
+          console.warn("[ask] Turn limit reached with tools pending; forcing an answer");
+          await streamTurn(input, send, sources, false);
         }
 
         if (sources.size > 0) send({ sources: [...sources.values()] });

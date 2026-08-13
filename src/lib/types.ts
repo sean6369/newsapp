@@ -58,15 +58,17 @@ export interface ChatMessage {
   /** Archive searches behind this reply, in the order they ran. */
   steps?: AskStep[];
   /** Archive articles the reply drew on, for rendering as cards. */
-  articles?: RetrievedArticleRef[];
+  articles?: RetrievedArticle[];
 }
 
 /**
- * The subset of a retrieved article the client renders. Mirrors
- * `RetrievedArticle` in `lib/retrieval` without importing it, so the types
- * module stays free of server-only dependencies.
+ * An article returned by retrieval, as far as the client is concerned.
+ *
+ * Defined here rather than in `lib/retrieval` so the client can name the shape
+ * without importing a module that reaches for the database — and defined only
+ * once, since two identical hand-kept copies drift.
  */
-export interface RetrievedArticleRef {
+export interface RetrievedArticle {
   slug: string;
   title: string;
   summary: string;
