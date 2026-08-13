@@ -757,6 +757,27 @@ const RETRIEVAL_POOL = 60;
  */
 const RRF_K = 60;
 
+/**
+ * How close a vector must be to count as a match at all.
+ *
+ * Without this the semantic arm never returns nothing — something is always
+ * nearest in vector space — so an off-topic question came back with twelve
+ * unrelated articles rather than an empty result. That matters beyond tidiness:
+ * the system prompt tells the model to say plainly when the archive has nothing
+ * on a topic, and it could never observe that case, because "no coverage" and
+ * "twelve weak matches" looked identical.
+ *
+ * 0.55 is where the two populations separate, measured rather than guessed.
+ * Real questions about the corpus peak at 0.69–0.75 and keep all 60 candidates
+ * at this floor; questions with no possible answer here ("sourdough starter
+ * hydration", "fix a leaking tap") peak at 0.54 and lose all 60. Raising it to
+ * 0.60 starts cutting genuine matches; lowering it to 0.50 lets two-thirds of
+ * the noise back through.
+ *
+ * The lexical arm needs no equivalent — no keyword match already means no rows.
+ */
+const MIN_SIMILARITY = 0.55;
+
 export type RetrievalRow = {
   slug: string;
   title: string;
@@ -814,7 +835,10 @@ export async function hybridSearchArticles(params: {
         FROM (
           SELECT a.slug, a.embedding <=> ${sql`${JSON.stringify(embedding)}::vector`} AS d, a.date
           FROM articles a
-          WHERE a.embedding IS NOT NULL${scopeFilter}
+          WHERE a.embedding IS NOT NULL
+            -- pgvector's <=> is cosine *distance*, so the floor inverts.
+            AND a.embedding <=> ${sql`${JSON.stringify(embedding)}::vector`} < ${1 - MIN_SIMILARITY}
+            ${scopeFilter}
           ORDER BY d ASC
           LIMIT ${RETRIEVAL_POOL}
         ) t`
