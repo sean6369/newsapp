@@ -1,48 +1,14 @@
 import { USER_INTERESTS } from "./interests";
 import { GEMINI_API_KEY, geminiUrl } from "./gemini";
+import { createRateLimiter, parseRetryDelayMs, sleep } from "./rate-limit";
 
 // gemini-3.5-flash-lite free tier allows 15 requests/minute per model. Pace
 // every scoring call through one shared sliding window (with a small margin)
 // so concurrent callers — pipeline batches, backfill, rescore scripts — can't
-// collectively burst past the quota. This is the single choke point for all
-// Gemini usage; extraction/chat/storylines run on OpenAI.
-const MAX_REQUESTS_PER_WINDOW = 14;
+// collectively burst past the quota. Embedding runs on a different model and
+// so a different quota; see `embeddings.ts` for its own limiter.
 const WINDOW_MS = 60_000;
-const requestTimestamps: number[] = [];
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function acquireRateLimitSlot(): Promise<void> {
-  for (;;) {
-    const now = Date.now();
-    while (requestTimestamps.length > 0 && now - requestTimestamps[0] >= WINDOW_MS) {
-      requestTimestamps.shift();
-    }
-    // No await between the check and the push, so admission is atomic and
-    // concurrent callers can't over-admit.
-    if (requestTimestamps.length < MAX_REQUESTS_PER_WINDOW) {
-      requestTimestamps.push(now);
-      return;
-    }
-    const waitMs = WINDOW_MS - (now - requestTimestamps[0]) + 50;
-    await sleep(waitMs);
-  }
-}
-
-// Gemini 429 responses carry the wait time in error.details[].retryDelay
-// (e.g. "48s"). Honour it when present; otherwise back off a few seconds.
-function parseRetryDelayMs(body: unknown): number {
-  const details = (body as { error?: { details?: Array<{ retryDelay?: string }> } })
-    ?.error?.details;
-  const retryDelay = details?.find((d) => d.retryDelay)?.retryDelay;
-  const match = retryDelay?.match(/([\d.]+)s/);
-  if (match) {
-    return Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, WINDOW_MS);
-  }
-  return 5000;
-}
+const scoringLimiter = createRateLimiter(14, WINDOW_MS);
 
 export async function scoreArticle(
   article: {
@@ -78,7 +44,7 @@ Respond with ONLY four integers separated by commas (e.g. "28,17,6,22"). No othe
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      await acquireRateLimitSlot();
+      await scoringLimiter.acquire();
 
       const response = await fetch(`${geminiUrl("generateContent", model)}?key=${GEMINI_API_KEY}`, {
         method: "POST",
@@ -97,7 +63,7 @@ Respond with ONLY four integers separated by commas (e.g. "28,17,6,22"). No othe
       // client-side limiter this should be rare (clock skew / shared quota).
       if (response.status === 429 && attempt < MAX_ATTEMPTS) {
         const body = await response.json().catch(() => null);
-        const waitMs = parseRetryDelayMs(body);
+        const waitMs = parseRetryDelayMs(body, 5000, WINDOW_MS);
         console.warn(
           `[scorer] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt}/${MAX_ATTEMPTS - 1})`
         );

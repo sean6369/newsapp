@@ -10,7 +10,9 @@ import {
   index,
   uniqueIndex,
   customType,
+  vector,
 } from "drizzle-orm/pg-core";
+import { EMBEDDING_DIMENSIONS } from "../gemini";
 
 /**
  * Postgres `tsvector`. Only ever written by the database (generated column), so
@@ -46,6 +48,15 @@ export const articles = pgTable(
     searchVector: tsvector("search_vector").generatedAlwaysAs(
       sql`setweight(to_tsvector('english', coalesce("title", '')), 'A') || setweight(to_tsvector('english', coalesce("summary", '')), 'B') || setweight(to_tsvector('english', coalesce("content", '')), 'C')`
     ),
+    // Semantic half of the retrieval used by the AI reader. Null until the
+    // pipeline (or a backfill pass) embeds the row, mirroring how
+    // `relevance_score` is left null for a later pass to fill.
+    embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }),
+    // Which model produced `embedding`. Vectors from different models are not
+    // comparable, so a mixed column silently degrades ranking rather than
+    // failing — this is what makes stale rows findable after a model change.
+    embeddingModel: text("embedding_model"),
+    embeddedAt: timestamp("embedded_at"),
   },
   (t) => [
     index("idx_articles_date").on(t.date),
@@ -61,6 +72,11 @@ export const articles = pgTable(
     // Lets the feed's `search_vector @@ ... OR source_domain ILIKE ...` resolve
     // as a BitmapOr across both indexes instead of falling back to a seq scan.
     index("idx_articles_domain_trgm").using("gin", sql`${t.sourceDomain} gin_trgm_ops`),
+    // HNSW rather than the IVFFlat this column carried in an earlier life:
+    // IVFFlat needs representative rows to train its lists and periodic
+    // rebuilds as the corpus grows, and under-performs a sequential scan at
+    // this size. HNSW needs neither.
+    index("idx_articles_embedding").using("hnsw", t.embedding.op("vector_cosine_ops")),
   ]
 );
 

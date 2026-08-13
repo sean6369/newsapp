@@ -120,6 +120,13 @@
       "when": 1785308609955,
       "tag": "0016_add-domain-trgm-index",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786622761368,
+      "tag": "0017_add-embeddings",
+      "breakpoints": true
     }
   ]
 }

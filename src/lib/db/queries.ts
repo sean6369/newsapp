@@ -1,6 +1,7 @@
-import { eq, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle-orm";
+import { eq, ne, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle-orm";
 import { db } from "./index";
 import { articles, storylines, storylineArticles } from "./schema";
+import { EMBEDDING_MODEL } from "../gemini";
 import type { Article, ArticleFilters, SearchFilters, SearchResponse, SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
 
@@ -153,6 +154,72 @@ export async function updateRelevanceScore(
   await db
     .update(articles)
     .set({ relevanceScore: score })
+    .where(eq(articles.slug, slug));
+}
+
+const embeddingColumns = {
+  slug: articles.slug,
+  title: articles.title,
+  summary: articles.summary,
+  content: articles.content,
+};
+
+export type ArticleForEmbedding = {
+  slug: string;
+  title: string;
+  summary: string;
+  content: string | null;
+};
+
+/**
+ * Rows still awaiting a vector, either never embedded or embedded by a model
+ * we no longer use. Vectors from different models occupy different spaces, so
+ * a mixed column ranks badly rather than erroring — catching the mismatch here
+ * is what makes a model change recoverable by re-running the backfill.
+ */
+export async function getUnembeddedArticles(): Promise<ArticleForEmbedding[]> {
+  return db
+    .select(embeddingColumns)
+    .from(articles)
+    .where(
+      or(isNull(articles.embedding), ne(articles.embeddingModel, EMBEDDING_MODEL))
+    )
+    // Newest first, so a backfill interrupted partway through has still
+    // covered the articles most likely to be asked about.
+    .orderBy(desc(articles.date));
+}
+
+/**
+ * Every article, staleest embedding first. The ordering is what makes a forced
+ * re-embed resumable: storing a vector stamps `embedded_at`, moving that row to
+ * the back, so repeated capped calls walk the corpus instead of re-embedding
+ * the same head of it.
+ */
+export async function getAllArticlesForEmbedding(): Promise<ArticleForEmbedding[]> {
+  return db
+    .select(embeddingColumns)
+    .from(articles)
+    .orderBy(sql`${articles.embeddedAt} ASC NULLS FIRST`);
+}
+
+/**
+ * Read back for embedding rather than reusing the in-memory `RawArticle`: the
+ * stored row is what a backfill would later see, so both paths embed byte-identical text.
+ */
+export async function getArticlesForEmbeddingBySlugs(
+  slugs: string[]
+): Promise<ArticleForEmbedding[]> {
+  if (slugs.length === 0) return [];
+  return db.select(embeddingColumns).from(articles).where(inArray(articles.slug, slugs));
+}
+
+export async function updateArticleEmbedding(
+  slug: string,
+  embedding: number[]
+): Promise<void> {
+  await db
+    .update(articles)
+    .set({ embedding, embeddingModel: EMBEDDING_MODEL, embeddedAt: new Date() })
     .where(eq(articles.slug, slug));
 }
 

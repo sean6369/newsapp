@@ -10,8 +10,17 @@ import {
 } from "./types";
 import { clipArticle } from "./clipper";
 import { buildArticle } from "./articles";
-import { insertArticle, getExistingArticles, updateArticleMetadata, matchStories, updateRelevanceScore } from "./db/queries";
+import {
+  insertArticle,
+  getExistingArticles,
+  updateArticleMetadata,
+  matchStories,
+  updateRelevanceScore,
+  updateArticleEmbedding,
+  getArticlesForEmbeddingBySlugs,
+} from "./db/queries";
 import { scoreArticle } from "./scorer";
+import { embedDocuments, embeddingInput } from "./embeddings";
 import type { RawArticle, PipelineResult } from "./types";
 
 const MAX_CONCURRENT = 3;
@@ -216,6 +225,26 @@ export async function runFetchPipeline(options?: {
         }
       });
       console.log(`[pipeline] Scored ${scored}/${scoreTargets.length} articles`);
+    }
+
+    // Embed the same batch for semantic retrieval. Batched rather than
+    // per-article, so this is a couple of requests even for a large run —
+    // cheap enough to sit behind scoring rather than deferred further. A
+    // failure leaves `embedding` null for the next backfill pass to retry.
+    if (scoreTargets.length > 0) {
+      const rows = await getArticlesForEmbeddingBySlugs(scoreTargets.map((t) => t.slug));
+      const { vectors, quotaExhausted } = await embedDocuments(rows.map(embeddingInput));
+
+      let embedded = 0;
+      for (const [i, vector] of vectors.entries()) {
+        if (!vector) continue;
+        await updateArticleEmbedding(rows[i].slug, vector);
+        embedded++;
+      }
+      console.log(
+        `[pipeline] Embedded ${embedded}/${rows.length} articles` +
+          (quotaExhausted ? " (daily quota reached; the rest retry tomorrow)" : "")
+      );
     }
 
     console.log(
