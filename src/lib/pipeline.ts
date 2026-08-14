@@ -19,8 +19,9 @@ import {
   updateArticleEmbedding,
   getArticlesForEmbeddingBySlugs,
   getRecentUnembeddedArticles,
+  getRecentUnscoredArticles,
 } from "./db/queries";
-import { scoreArticle } from "./scorer";
+import { scoreArticle, isScoringQuotaExhausted } from "./scorer";
 import { embedAndStore } from "./embeddings";
 import { archiveDaysAgo } from "./dates";
 import type { RawArticle, PipelineResult } from "./types";
@@ -40,6 +41,22 @@ import type { RawArticle, PipelineResult } from "./types";
  */
 const EMBED_HORIZON_DAYS = 7;
 const EMBED_CATCHUP_LIMIT = 100;
+
+/**
+ * The same repair for relevance scores, on a much smaller allowance.
+ *
+ * The horizon matches the embedding pass for the same reason it has one, but
+ * the cap is deliberately a fraction of it: scoring is the tighter quota.
+ * Ingest alone spends a few hundred requests a day against a model that allows
+ * 15 a minute, and a hundred per hourly run would add thousands more on top.
+ * This drains a backlog over days rather than in an afternoon, which is the
+ * right trade when the alternative risks the day's allowance for new articles.
+ *
+ * Articles older than the horizon stay unscored; `/api/backfill` remains the
+ * way to sweep the deep archive deliberately.
+ */
+const SCORE_HORIZON_DAYS = 7;
+const SCORE_CATCHUP_LIMIT = 20;
 
 const MAX_CONCURRENT = 3;
 const DELAY_BETWEEN_BATCHES_MS = 500;
@@ -266,6 +283,34 @@ export async function runFetchPipeline(options?: {
         `[pipeline] Embedded ${embedded}/${rows.length} articles` +
           (quotaExhausted ? " (daily quota reached; the rest retry next run)" : "")
       );
+    }
+
+    // Repair recent articles that never got a score.
+    //
+    // Sits after the new articles for the same reason the embedding repair
+    // does — today's news outranks patching last Tuesday — and draws on its own
+    // quota, so it is gated on scoring's daily cap rather than embedding's.
+    // Skipped outright once that cap is reached, since every call would return
+    // null without leaving the process.
+    if (!isScoringQuotaExhausted()) {
+      const unscored = await getRecentUnscoredArticles(
+        archiveDaysAgo(SCORE_HORIZON_DAYS),
+        SCORE_CATCHUP_LIMIT
+      );
+      if (unscored.length > 0) {
+        let repaired = 0;
+        await processInBatches(unscored, MAX_CONCURRENT, async (article) => {
+          const score = await scoreArticle(article);
+          if (score !== null) {
+            await updateRelevanceScore(article.slug, score);
+            repaired++;
+          }
+        });
+        console.log(
+          `[pipeline] Caught up ${repaired}/${unscored.length} unscored articles` +
+            (isScoringQuotaExhausted() ? " (daily quota reached)" : "")
+        );
+      }
     }
 
     // Repair recent articles that never got a vector.

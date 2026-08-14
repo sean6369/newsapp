@@ -143,6 +143,30 @@ export async function getUnscoredArticles(): Promise<ArticleForScoring[]> {
   return db.select(scoringColumns).from(articles).where(isNull(articles.relevanceScore));
 }
 
+/**
+ * Recent articles still missing a relevance score, newest first.
+ *
+ * The scoring counterpart to {@link getRecentUnembeddedArticles}, and it exists
+ * for the same reason: the pipeline only scores rows a run just inserted, so an
+ * article whose scoring call failed keeps a null score indefinitely.
+ * {@link getUnscoredArticles} can repair one, but only `/api/backfill` calls it
+ * and nothing calls that — which is how a backlog of null scores built up.
+ *
+ * Bounded rather than unbounded because scoring is the tighter Gemini quota:
+ * this runs hourly, so the limit is a per-run spend, not a one-off cost.
+ */
+export async function getRecentUnscoredArticles(
+  sinceDate: string,
+  limit: number
+): Promise<ArticleForScoring[]> {
+  return db
+    .select(scoringColumns)
+    .from(articles)
+    .where(and(isNull(articles.relevanceScore), gte(articles.date, sinceDate)))
+    .orderBy(desc(articles.date))
+    .limit(limit);
+}
+
 export async function getAllArticlesForScoring(): Promise<ArticleForScoring[]> {
   return db.select(scoringColumns).from(articles);
 }

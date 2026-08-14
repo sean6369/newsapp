@@ -1,6 +1,11 @@
 import { USER_INTERESTS } from "./interests";
 import { GEMINI_API_KEY, geminiUrl } from "./gemini";
-import { createRateLimiter, parseRetryDelayMs, sleep } from "./rate-limit";
+import {
+  createRateLimiter,
+  isDailyQuotaError,
+  parseRetryDelayMs,
+  sleep,
+} from "./rate-limit";
 
 // gemini-3.5-flash-lite free tier allows 15 requests/minute per model. Pace
 // every scoring call through one shared sliding window (with a small margin)
@@ -9,6 +14,38 @@ import { createRateLimiter, parseRetryDelayMs, sleep } from "./rate-limit";
 // so a different quota; see `embeddings.ts` for its own limiter.
 const WINDOW_MS = 60_000;
 const scoringLimiter = createRateLimiter(14, WINDOW_MS);
+
+/**
+ * The quota day on which scoring hit the daily cap, or null.
+ *
+ * Per-minute rejections are worth retrying; the daily cap is not, and
+ * `parseRetryDelayMs` caps its multi-hour `retryDelay` at `WINDOW_MS` — so
+ * without this every remaining article spends its retries against a wall that
+ * will not move before midnight. A 300-article day grinds for hours and the
+ * next hourly run repeats it.
+ *
+ * Keyed by Pacific day because that is when Gemini's daily quotas reset (see
+ * `isDailyQuotaError`), not `ARCHIVE_TZ`. Getting the boundary slightly wrong
+ * is self-correcting: resuming early just re-latches on the next 429.
+ */
+let quotaExhaustedOn: string | null = null;
+
+function quotaDay(): string {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/Los_Angeles",
+  });
+}
+
+/**
+ * Whether today's scoring allowance is already spent.
+ *
+ * Lets a caller skip work it would only throw away — the pipeline's catch-up
+ * pass checks this before querying for articles to repair, the same way the
+ * embedding catch-up checks `quotaExhausted`.
+ */
+export function isScoringQuotaExhausted(): boolean {
+  return quotaExhaustedOn === quotaDay();
+}
 
 export async function scoreArticle(
   article: {
@@ -19,6 +56,10 @@ export async function scoreArticle(
   },
   model?: string
 ): Promise<number | null> {
+  // Checked before the limiter, not after: acquiring first would make every
+  // remaining article wait its turn in the 14/min queue only to give up.
+  if (isScoringQuotaExhausted()) return null;
+
   const prompt = `You are a news relevance scorer. Rate this article on 4 dimensions with the given ranges.
 Do NOT round scores to multiples of 5 — use precise values like 17, 23, 6.
 Use the full range of each dimension: give low scores to weak matches and high scores to strong ones.
@@ -61,14 +102,28 @@ Respond with ONLY four integers separated by commas (e.g. "28,17,6,22"). No othe
 
       // Retry rate-limit rejections using the delay the API asks for. With the
       // client-side limiter this should be rare (clock skew / shared quota).
-      if (response.status === 429 && attempt < MAX_ATTEMPTS) {
+      // The daily cap is tested first and on every attempt — the old guard
+      // skipped this branch entirely on the last one, so the one rejection
+      // most worth recognising was the one that went unread.
+      if (response.status === 429) {
         const body = await response.json().catch(() => null);
-        const waitMs = parseRetryDelayMs(body, 5000, WINDOW_MS);
-        console.warn(
-          `[scorer] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt}/${MAX_ATTEMPTS - 1})`
-        );
-        await sleep(waitMs);
-        continue;
+
+        if (isDailyQuotaError(body)) {
+          quotaExhaustedOn = quotaDay();
+          console.warn(
+            "[scorer] Daily quota exhausted — scoring stops until it resets; unscored articles stay null for a later run"
+          );
+          return null;
+        }
+
+        if (attempt < MAX_ATTEMPTS) {
+          const waitMs = parseRetryDelayMs(body, 5000, WINDOW_MS);
+          console.warn(
+            `[scorer] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt}/${MAX_ATTEMPTS - 1})`
+          );
+          await sleep(waitMs);
+          continue;
+        }
       }
 
       if (!response.ok) {
