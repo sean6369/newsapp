@@ -1,4 +1,4 @@
-import { eq, ne, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL } from "drizzle-orm";
+import { eq, ne, gte, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL } from "drizzle-orm";
 import { db } from "./index";
 import { articles } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
@@ -195,6 +195,33 @@ export async function getUnembeddedArticles(): Promise<ArticleForEmbedding[]> {
  * the back, so repeated capped calls walk the corpus instead of re-embedding
  * the same head of it.
  */
+/**
+ * Recent articles still missing a vector, newest first.
+ *
+ * The horizon is the point. Nothing else retries a failed embedding — the
+ * pipeline only embeds the rows a run just inserted — so a call that fails on
+ * quota or a rate limit leaves a hole that would otherwise never be filled.
+ * Bounding the lookback repairs the window semantic search is meant to cover
+ * without ever reaching back into history the reader has chosen to leave
+ * lexical-only.
+ */
+export async function getRecentUnembeddedArticles(
+  sinceDate: string,
+  limit: number
+): Promise<ArticleForEmbedding[]> {
+  return db
+    .select(embeddingColumns)
+    .from(articles)
+    .where(
+      and(
+        or(isNull(articles.embedding), ne(articles.embeddingModel, EMBEDDING_MODEL)),
+        gte(articles.date, sinceDate)
+      )
+    )
+    .orderBy(desc(articles.date))
+    .limit(limit);
+}
+
 export async function getAllArticlesForEmbedding(): Promise<ArticleForEmbedding[]> {
   return db
     .select(embeddingColumns)

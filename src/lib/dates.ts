@@ -15,3 +15,16 @@ export const ARCHIVE_TZ = "Asia/Singapore";
 export function archiveToday(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: ARCHIVE_TZ });
 }
+
+/**
+ * `n` days before today, as `YYYY-MM-DD` in {@link ARCHIVE_TZ}.
+ *
+ * Same basis as {@link archiveToday} for the same reason: anything compared
+ * against `articles.date` has to be a Singapore day, or the window silently
+ * shifts by one for the eight hours the server's UTC clock disagrees.
+ */
+export function archiveDaysAgo(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toLocaleDateString("en-CA", { timeZone: ARCHIVE_TZ });
+}

@@ -4,7 +4,7 @@ import {
   getAllArticlesForEmbedding,
   updateArticleEmbedding,
 } from "@/lib/db/queries";
-import { embedDocuments, embeddingInput } from "@/lib/embeddings";
+import { embedAndStore } from "@/lib/embeddings";
 
 /**
  * How many articles one call will embed.
@@ -36,24 +36,10 @@ export async function POST(request: NextRequest) {
     `[embed-backfill] Embedding ${toEmbed.length} articles${force ? " (force re-embed)" : ""}, ${remaining} to follow...`
   );
 
-  const { vectors, quotaExhausted } = await embedDocuments(toEmbed.map(embeddingInput));
-
-  let embedded = 0;
-  let failed = 0;
-
-  for (const [i, vector] of vectors.entries()) {
-    if (!vector) {
-      failed++;
-      continue;
-    }
-    try {
-      await updateArticleEmbedding(toEmbed[i].slug, vector);
-      embedded++;
-    } catch (error) {
-      failed++;
-      console.error(`[embed-backfill] Failed to store: ${toEmbed[i].slug}`, error);
-    }
-  }
+  const { embedded, failed, quotaExhausted } = await embedAndStore(
+    toEmbed,
+    updateArticleEmbedding
+  );
 
   console.log(
     `[embed-backfill] Done: ${embedded} embedded, ${failed} failed${quotaExhausted ? " (daily quota spent)" : ""}`

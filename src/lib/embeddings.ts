@@ -276,3 +276,39 @@ export async function embedQuery(text: string): Promise<number[] | null> {
     throw error;
   }
 }
+
+/**
+ * Embeds a batch and stores what succeeded, reporting the counts.
+ *
+ * The same loop had grown in three places — the pipeline, the backfill script,
+ * and the backfill route — and a fourth was about to appear for the catch-up
+ * pass. Failures deliberately leave `embedding` null rather than recording
+ * anything: null is the retry signal every one of those callers depends on.
+ */
+export async function embedAndStore(
+  rows: Array<{ slug: string } & EmbeddableArticle>,
+  store: (slug: string, embedding: number[]) => Promise<void>
+): Promise<{ embedded: number; failed: number; quotaExhausted: boolean }> {
+  if (rows.length === 0) return { embedded: 0, failed: 0, quotaExhausted: false };
+
+  const { vectors, quotaExhausted } = await embedDocuments(rows.map(embeddingInput));
+
+  let embedded = 0;
+  let failed = 0;
+
+  for (const [i, vector] of vectors.entries()) {
+    if (!vector) {
+      failed++;
+      continue;
+    }
+    try {
+      await store(rows[i].slug, vector);
+      embedded++;
+    } catch (error) {
+      failed++;
+      console.error(`[embeddings] Failed to store ${rows[i].slug}:`, error);
+    }
+  }
+
+  return { embedded, failed, quotaExhausted };
+}

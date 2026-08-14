@@ -18,10 +18,28 @@ import {
   updateRelevanceScore,
   updateArticleEmbedding,
   getArticlesForEmbeddingBySlugs,
+  getRecentUnembeddedArticles,
 } from "./db/queries";
 import { scoreArticle } from "./scorer";
-import { embedDocuments, embeddingInput } from "./embeddings";
+import { embedAndStore } from "./embeddings";
+import { archiveDaysAgo } from "./dates";
 import type { RawArticle, PipelineResult } from "./types";
+
+/**
+ * How far back the embedding catch-up looks, and how many rows it repairs per
+ * run.
+ *
+ * The horizon is what keeps this a repair rather than a backfill: it covers
+ * the window semantic search is meant to serve and never reaches into older
+ * articles left deliberately lexical-only. A week survives a multi-day outage
+ * without ever drifting into history.
+ *
+ * The cap bounds a pathological backlog. At hourly cadence it still repairs
+ * far faster than the pipeline ingests, so it converges quickly while never
+ * being able to drain a day's allowance in one pass.
+ */
+const EMBED_HORIZON_DAYS = 7;
+const EMBED_CATCHUP_LIMIT = 100;
 
 const MAX_CONCURRENT = 3;
 const DELAY_BETWEEN_BATCHES_MS = 500;
@@ -238,21 +256,41 @@ export async function runFetchPipeline(options?: {
     // Embed the same batch for semantic retrieval. Batched rather than
     // per-article, so this is a couple of requests even for a large run —
     // cheap enough to sit behind scoring rather than deferred further. A
-    // failure leaves `embedding` null for the next backfill pass to retry.
+    // failure leaves `embedding` null for the catch-up below to retry.
+    let quotaSpent = false;
     if (scoreTargets.length > 0) {
       const rows = await getArticlesForEmbeddingBySlugs(scoreTargets.map((t) => t.slug));
-      const { vectors, quotaExhausted } = await embedDocuments(rows.map(embeddingInput));
-
-      let embedded = 0;
-      for (const [i, vector] of vectors.entries()) {
-        if (!vector) continue;
-        await updateArticleEmbedding(rows[i].slug, vector);
-        embedded++;
-      }
+      const { embedded, quotaExhausted } = await embedAndStore(rows, updateArticleEmbedding);
+      quotaSpent = quotaExhausted;
       console.log(
         `[pipeline] Embedded ${embedded}/${rows.length} articles` +
-          (quotaExhausted ? " (daily quota reached; the rest retry tomorrow)" : "")
+          (quotaExhausted ? " (daily quota reached; the rest retry next run)" : "")
       );
+    }
+
+    // Repair recent articles that never got a vector.
+    //
+    // Nothing else retries one. A call that fails on quota or a rate limit
+    // leaves a hole, and since the embed step above only ever looks at rows
+    // this run inserted, that hole would persist for good — semantic search
+    // would silently miss part of a day while lexical still covered it.
+    //
+    // Runs after the new articles, never before: when the day's allowance is
+    // tight, today's news matters more than patching last Tuesday. Skipped
+    // entirely once the allowance is gone, since every call would fail the
+    // same way.
+    if (!quotaSpent) {
+      const stale = await getRecentUnembeddedArticles(
+        archiveDaysAgo(EMBED_HORIZON_DAYS),
+        EMBED_CATCHUP_LIMIT
+      );
+      if (stale.length > 0) {
+        const { embedded, quotaExhausted } = await embedAndStore(stale, updateArticleEmbedding);
+        console.log(
+          `[pipeline] Caught up ${embedded}/${stale.length} unembedded articles` +
+            (quotaExhausted ? " (daily quota reached)" : "")
+        );
+      }
     }
 
     console.log(

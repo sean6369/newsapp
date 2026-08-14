@@ -4,7 +4,7 @@ import {
   getAllArticlesForEmbedding,
   updateArticleEmbedding,
 } from "../src/lib/db/queries";
-import { embedDocuments, embeddingInput } from "../src/lib/embeddings";
+import { embedAndStore, embeddingInput } from "../src/lib/embeddings";
 
 /**
  * Embeds the corpus for semantic retrieval.
@@ -45,21 +45,12 @@ async function main() {
 
   for (let i = 0; i < pending.length; i += CHUNK) {
     const chunk = pending.slice(i, i + CHUNK);
-    const { vectors, quotaExhausted } = await embedDocuments(chunk.map(embeddingInput));
-
-    for (const [j, vector] of vectors.entries()) {
-      if (!vector) {
-        failed++;
-        continue;
-      }
-      try {
-        await updateArticleEmbedding(chunk[j].slug, vector);
-        embedded++;
-      } catch (error) {
-        failed++;
-        console.error(`[backfill-embeddings] Failed to store: ${chunk[j].slug}`, error);
-      }
-    }
+    const { embedded: ok, failed: bad, quotaExhausted } = await embedAndStore(
+      chunk,
+      updateArticleEmbedding
+    );
+    embedded += ok;
+    failed += bad;
 
     const done = Math.min(i + CHUNK, pending.length);
     const elapsed = (Date.now() - startedAt) / 1000;
