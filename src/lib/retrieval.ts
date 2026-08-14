@@ -1,4 +1,9 @@
-import { hybridSearchArticles, getStoryOutlets, type RetrievalRow } from "./db/queries";
+import {
+  hybridSearchArticles,
+  listArticlesByDate,
+  getStoryOutlets,
+  type ArticleRow,
+} from "./db/queries";
 import { embedQuery } from "./embeddings";
 import type { FeedType, RetrievedArticle } from "./types";
 
@@ -37,7 +42,11 @@ const MAX_SUMMARY_CHARS = 400;
 export type { RetrievedArticle };
 
 export interface RetrievalParams {
-  query: string;
+  /**
+   * What to search for. Omitted, the call becomes a browse: the window named by
+   * `feed`/`from`/`to` is returned newest first, unranked by topic.
+   */
+  query?: string;
   feed?: FeedType | "all";
   /** Inclusive `YYYY-MM-DD` bounds, matching `articles.date`. */
   from?: string;
@@ -88,12 +97,13 @@ async function embedQueryCached(query: string): Promise<number[] | null> {
  * `alsoReportedBy` is left empty here and filled from the story group itself
  * once the final set is known — see `attachCorroboration`.
  */
-function collapseStories(rows: RetrievalRow[]): RetrievedArticle[] {
+function collapseStories(rows: ArticleRow[]): RetrievedArticle[] {
   const seenStories = new Set<string>();
   const results: RetrievedArticle[] = [];
 
   for (const row of rows) {
-    // Rows arrive in fused-rank order, so the first copy seen is the best-ranked.
+    // Rows arrive already ordered — by fused rank, or by date when browsing —
+    // so the first copy seen is the one worth keeping either way.
     if (row.story_group && seenStories.has(row.story_group)) continue;
 
     const article: RetrievedArticle = {
@@ -127,7 +137,7 @@ function collapseStories(rows: RetrievalRow[]): RetrievedArticle[] {
  */
 async function attachCorroboration(
   articles: RetrievedArticle[],
-  rows: RetrievalRow[]
+  rows: ArticleRow[]
 ): Promise<void> {
   const groupBySlug = new Map(rows.map((r) => [r.slug, r.story_group]));
   const groups = articles
@@ -163,37 +173,42 @@ function applyBudget(articles: RetrievedArticle[]): RetrievedArticle[] {
 }
 
 /**
- * Finds articles relevant to a question. Returns `[]` rather than throwing
- * when the query cannot be embedded — a failed tool call should cost the model
- * one empty result it can react to, not the whole answer.
+ * Finds articles for a question, or lists a window when given no query.
+ *
+ * Returns `[]` rather than throwing when the query cannot be embedded — a
+ * failed tool call should cost the model one empty result it can react to, not
+ * the whole answer.
  */
 export async function retrieveArticles(
   params: RetrievalParams
 ): Promise<RetrievedArticle[]> {
-  const query = params.query.trim();
-  if (!query) return [];
+  const query = params.query?.trim();
 
   const limit = Math.min(Math.max(params.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
 
-  // A null vector is not fatal. The daily embedding allowance is small enough
-  // to actually run out, and a reader asking a question then deserves the
-  // lexical answer rather than silence.
-  const embedding = await embedQueryCached(query);
-  if (!embedding) {
-    console.warn("[retrieval] No query vector — falling back to lexical only");
-  }
-
-  // Over-fetch: collapsing same-story duplicates shrinks the list, so asking
-  // for exactly `limit` rows would return fewer than requested whenever the
-  // results contain a story more than one outlet covered.
-  const rows = await hybridSearchArticles({
-    query,
-    embedding,
+  // Over-fetch on both paths: collapsing same-story duplicates shrinks the
+  // list, so asking for exactly `limit` rows would return fewer than requested
+  // whenever the results contain a story more than one outlet covered.
+  const scope = {
     feed: params.feed,
     from: params.from,
     to: params.to,
     limit: limit * 2,
-  });
+  };
+
+  let rows: ArticleRow[];
+  if (query) {
+    // A null vector is not fatal. The daily embedding allowance is small enough
+    // to actually run out, and a reader asking a question then deserves the
+    // lexical answer rather than silence.
+    const embedding = await embedQueryCached(query);
+    if (!embedding) {
+      console.warn("[retrieval] No query vector — falling back to lexical only");
+    }
+    rows = await hybridSearchArticles({ query, embedding, ...scope });
+  } else {
+    rows = await listArticlesByDate(scope);
+  }
 
   const results = applyBudget(collapseStories(rows)).slice(0, limit);
   await attachCorroboration(results, rows);
