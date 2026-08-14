@@ -2,18 +2,13 @@
 
 import { usePathname } from "next/navigation";
 import { FloatingDock } from "@/components/FloatingDock";
-import { Home, TrendingUp, Search, Sparkles } from "lucide-react";
+import { Home, Search, Sparkles } from "lucide-react";
 
 const navItems = [
   {
     title: "Feed",
     icon: <Home className="h-full w-full text-foreground" />,
     href: "/",
-  },
-  {
-    title: "Top Stories",
-    icon: <TrendingUp className="h-full w-full text-foreground" />,
-    href: "/top-stories",
   },
   {
     title: "Search",
@@ -30,7 +25,7 @@ const navItems = [
 export function NavDock() {
   const pathname = usePathname();
 
-  if (pathname.startsWith("/article/") || pathname.startsWith("/top-stories/story/")) return null;
+  if (pathname.startsWith("/article/")) return null;
 
   return (
     <FloatingDock

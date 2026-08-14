@@ -3,7 +3,6 @@ import {
   pgTable,
   text,
   integer,
-  serial,
   real,
   boolean,
   timestamp,
@@ -77,37 +76,5 @@ export const articles = pgTable(
     // rebuilds as the corpus grows, and under-performs a sequential scan at
     // this size. HNSW needs neither.
     index("idx_articles_embedding").using("hnsw", t.embedding.op("vector_cosine_ops")),
-  ]
-);
-
-export const storylines = pgTable(
-  "storylines",
-  {
-    id: serial("id").primaryKey(),
-    headline: text("headline").notNull(),
-    summary: text("summary").notNull(),
-    fullStory: text("full_story").notNull(),
-    batchDate: text("batch_date").notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (t) => [
-    index("idx_storylines_created").on(t.createdAt),
-    index("idx_storylines_batch_date").on(t.batchDate),
-  ]
-);
-
-export const storylineArticles = pgTable(
-  "storyline_articles",
-  {
-    storylineId: integer("storyline_id")
-      .notNull()
-      .references(() => storylines.id, { onDelete: "cascade" }),
-    articleSlug: text("article_slug")
-      .notNull()
-      .references(() => articles.slug, { onDelete: "cascade" }),
-  },
-  (t) => [
-    uniqueIndex("idx_storyline_articles_pk").on(t.storylineId, t.articleSlug),
-    index("idx_storyline_articles_storyline").on(t.storylineId),
   ]
 );

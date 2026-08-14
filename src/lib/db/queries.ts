@@ -1,6 +1,6 @@
 import { eq, ne, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle-orm";
 import { db } from "./index";
-import { articles, storylines, storylineArticles } from "./schema";
+import { articles } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
 import type { Article, ArticleFilters, FeedType, SearchFilters, SearchResponse, SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
@@ -617,126 +617,6 @@ export async function getArticlesByStoryGroup(storyGroup: string): Promise<Artic
     .from(articles)
     .where(eq(articles.storyGroup, storyGroup));
   return rows.map((r) => rowToArticle(r));
-}
-
-// ── Storyline functions ───────────────────────────────────────────────
-
-export async function getRecentArticles(): Promise<Array<{ slug: string; title: string; summary: string; content: string | null; sourceDomain: string }>> {
-  const rows = await db.execute(sql`
-    SELECT slug, title, summary, content, source_domain AS "sourceDomain"
-    FROM articles
-    WHERE date >= to_char((NOW() AT TIME ZONE 'Asia/Singapore')::date - 3, 'YYYY-MM-DD')
-      AND date < to_char((NOW() AT TIME ZONE 'Asia/Singapore')::date, 'YYYY-MM-DD')
-    ORDER BY date DESC, created_at DESC
-  `);
-  return rows as unknown as Array<{ slug: string; title: string; summary: string; content: string | null; sourceDomain: string }>;
-}
-
-export async function insertStoryline(
-  headline: string,
-  summary: string,
-  fullStory: string,
-  articleSlugs: string[],
-  batchDate: string
-): Promise<number> {
-  const [row] = await db
-    .insert(storylines)
-    .values({ headline, summary, fullStory, batchDate })
-    .returning({ id: storylines.id });
-
-  const uniqueSlugs = [...new Set(articleSlugs)];
-  if (uniqueSlugs.length > 0) {
-    await db.insert(storylineArticles).values(
-      uniqueSlugs.map((slug) => ({ storylineId: row.id, articleSlug: slug }))
-    );
-  }
-
-  return row.id;
-}
-
-export async function deleteStorylinesByBatch(batchDate: string): Promise<void> {
-  await db.delete(storylines).where(eq(storylines.batchDate, batchDate));
-}
-
-export async function getTopStorylines(): Promise<{
-  storylines: Array<{
-    id: number;
-    headline: string;
-    summary: string;
-    articleCount: number;
-    recentArticleCount: number;
-  }>;
-  generatedAt: Date | null;
-}> {
-  const rows = await db.execute(sql`
-    SELECT
-      s.id,
-      s.headline,
-      s.summary,
-      s.created_at AT TIME ZONE 'UTC' AS created_at,
-      (SELECT COUNT(*)::int FROM storyline_articles sa WHERE sa.storyline_id = s.id) AS article_count,
-      (SELECT COUNT(*)::int FROM storyline_articles sa
-        JOIN articles a ON sa.article_slug = a.slug
-        WHERE sa.storyline_id = s.id
-          AND a.date = to_char((NOW() AT TIME ZONE 'Asia/Singapore')::date - 1, 'YYYY-MM-DD')) AS recent_article_count
-    FROM storylines s
-    WHERE s.batch_date = (SELECT MAX(batch_date) FROM storylines)
-    ORDER BY s.id
-  `);
-  const typed = rows as unknown as Array<{
-    id: number;
-    headline: string;
-    summary: string;
-    created_at: Date;
-    article_count: number;
-    recent_article_count: number;
-  }>;
-  return {
-    storylines: typed.map((r) => ({
-      id: r.id,
-      headline: r.headline,
-      summary: r.summary,
-      articleCount: r.article_count,
-      recentArticleCount: r.recent_article_count,
-    })),
-    generatedAt: typed.length > 0 ? new Date(typed[0].created_at) : null,
-  };
-}
-
-export async function getStorylineById(id: number): Promise<{
-  id: number;
-  headline: string;
-  summary: string;
-  fullStory: string;
-  articles: Article[];
-} | null> {
-  const [row] = await db
-    .select({
-      id: storylines.id,
-      headline: storylines.headline,
-      summary: storylines.summary,
-      fullStory: storylines.fullStory,
-    })
-    .from(storylines)
-    .where(eq(storylines.id, id))
-    .limit(1);
-
-  if (!row) return null;
-
-  const articleRows = await db
-    .select(articleColumns)
-    .from(storylineArticles)
-    .innerJoin(articles, eq(storylineArticles.articleSlug, articles.slug))
-    .where(eq(storylineArticles.storylineId, id))
-    .orderBy(desc(articles.createdAt));
-
-  return {
-    id: row.id,
-    headline: row.headline,
-    summary: row.summary,
-    fullStory: row.fullStory,
-    articles: articleRows.map((r) => rowToArticle(r)),
-  };
 }
 
 // ── Hybrid retrieval (semantic + lexical) ─────────────────────────────

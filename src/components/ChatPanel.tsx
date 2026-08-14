@@ -14,9 +14,7 @@ interface ChatPanelProps {
 export function ChatPanel({ slug, onClose }: ChatPanelProps) {
   const { messages, sendMessage, isStreaming, isSearching, error, clearMessages } = useChat({
     endpoint: "/api/chat",
-    body: slug.startsWith("storyline:")
-      ? { storylineId: slug.slice("storyline:".length) }
-      : { slug },
+    body: { slug },
   });
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -59,7 +57,7 @@ export function ChatPanel({ slug, onClose }: ChatPanelProps) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
         {messages.length === 0 && (
           <div className="text-center py-8">
-            <p className="text-sm text-muted">Ask a question about this {slug.startsWith("storyline:") ? "story" : "article"}.</p>
+            <p className="text-sm text-muted">Ask a question about this article.</p>
           </div>
         )}
         {messages.map((msg, i) => (

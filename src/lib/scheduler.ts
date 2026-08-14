@@ -1,6 +1,5 @@
 import * as cron from "node-cron";
 import { getOrStartFetchPipeline } from "./pipeline";
-import { generateAndStoreStorylines } from "./storylines";
 
 let fetchTask: ReturnType<typeof cron.schedule> | null = null;
 
@@ -26,18 +25,6 @@ export function startScheduler() {
     }
   });
 
-  // Generate top storylines daily at 7:30 AM
-  cron.schedule("30 7 * * *", async () => {
-    console.log("[scheduler] Running daily storyline generation...");
-    try {
-      const result = await generateAndStoreStorylines();
-      console.log("[scheduler] Storylines complete:", result);
-    } catch (error) {
-      console.error("[scheduler] Storyline generation failed:", error);
-    }
-  });
-
   console.log("[scheduler] Fetch pipeline scheduled hourly");
-  console.log("[scheduler] Storyline generation scheduled daily at 7:30 AM");
 }
 

@@ -1,32 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getArticleBySlug, getArticleContent, getStorylineById } from "@/lib/db/queries";
-import { buildSystemPrompt, buildStorylineSystemPrompt } from "@/lib/chat";
+import { getArticleBySlug, getArticleContent } from "@/lib/db/queries";
+import { buildSystemPrompt } from "@/lib/chat";
 import { OPENAI_API_KEY, OPENAI_URL, OPENAI_CHAT_MODEL } from "@/lib/openai";
 import type { SearchSource } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
-  const { slug, storylineId, messages } = await request.json();
+  const { slug, messages } = await request.json();
 
-  if ((!slug && !storylineId) || !messages) {
-    return NextResponse.json({ error: "Missing slug/storylineId or messages" }, { status: 400 });
+  if (!slug || !messages) {
+    return NextResponse.json({ error: "Missing slug or messages" }, { status: 400 });
   }
 
-  let systemPrompt: string;
-
-  if (storylineId) {
-    const storyline = await getStorylineById(Number(storylineId));
-    if (!storyline) {
-      return NextResponse.json({ error: "Storyline not found" }, { status: 404 });
-    }
-    systemPrompt = buildStorylineSystemPrompt(storyline);
-  } else {
-    const article = await getArticleBySlug(slug);
-    if (!article) {
-      return NextResponse.json({ error: "Article not found" }, { status: 404 });
-    }
-    const markdown = (await getArticleContent(slug)) ?? article.summary;
-    systemPrompt = buildSystemPrompt(markdown, article);
+  const article = await getArticleBySlug(slug);
+  if (!article) {
+    return NextResponse.json({ error: "Article not found" }, { status: 404 });
   }
+  const markdown = (await getArticleContent(slug)) ?? article.summary;
+  const systemPrompt = buildSystemPrompt(markdown, article);
 
   const input = [
     { role: "system", content: systemPrompt },
