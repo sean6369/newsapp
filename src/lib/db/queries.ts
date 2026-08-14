@@ -775,7 +775,8 @@ const RRF_K = 60;
  */
 const MIN_SIMILARITY = 0.55;
 
-export type RetrievalRow = {
+/** The columns retrieval actually reads, however the rows were found. */
+export type ArticleRow = {
   slug: string;
   title: string;
   summary: string;
@@ -783,10 +784,32 @@ export type RetrievalRow = {
   source_domain: string;
   feed: string;
   story_group: string | null;
+};
+
+/** An `ArticleRow` plus the fusion diagnostics `scripts/check-retrieval.ts` reads. */
+export type RetrievalRow = ArticleRow & {
   score: number;
   lex_rank: number | null;
   vec_rank: number | null;
 };
+
+/**
+ * The feed and date narrowing both retrieval paths share.
+ *
+ * Written as a fragment appended to an existing `WHERE`, so every caller has to
+ * supply its own leading condition — `WHERE true` where there is nothing else.
+ */
+function retrievalScope(params: {
+  feed?: FeedType | "all";
+  from?: string;
+  to?: string;
+}) {
+  const { feed, from, to } = params;
+  const feedFilter = feed && feed !== "all" ? sql` AND a.feed = ${feed}` : sql``;
+  const fromFilter = from ? sql` AND a.date >= ${from}` : sql``;
+  const toFilter = to ? sql` AND a.date <= ${to}` : sql``;
+  return sql`${feedFilter}${fromFilter}${toFilter}`;
+}
 
 /**
  * Retrieves articles by fusing full-text and vector search with Reciprocal
@@ -814,10 +837,7 @@ export async function hybridSearchArticles(params: {
 }): Promise<RetrievalRow[]> {
   const { query, embedding, feed, from, to, limit } = params;
 
-  const feedFilter = feed && feed !== "all" ? sql` AND a.feed = ${feed}` : sql``;
-  const fromFilter = from ? sql` AND a.date >= ${from}` : sql``;
-  const toFilter = to ? sql` AND a.date <= ${to}` : sql``;
-  const scopeFilter = sql`${feedFilter}${fromFilter}${toFilter}`;
+  const scopeFilter = retrievalScope({ feed, from, to });
 
   // The semantic arm, or an empty stand-in shaped like it.
   //
@@ -866,6 +886,40 @@ export async function hybridSearchArticles(params: {
     ORDER BY score DESC, a.date DESC
     LIMIT ${limit}
   `)) as unknown as RetrievalRow[];
+}
+
+/**
+ * The articles in a window, newest first.
+ *
+ * The sibling `hybridSearchArticles` cannot answer a question that names a
+ * period rather than a topic — "what happened today", "summarise this week".
+ * Ranking there is relevance to a query, so a model forced to invent one gets
+ * a confidently wrong answer rather than an empty one: `"news"` scoped to a
+ * single day returned twelve articles of the 110 filed that day, one of which
+ * was among the twelve the day actually led with. Nothing in that result says
+ * it is a 1-in-9 sample, so the reader gets a day's summary built from
+ * whichever articles happened to sit near the word "news" in vector space.
+ *
+ * Within a day the order is relevance score, not recency. A day holds more
+ * articles than one tool call should return, so the choice is which of them to
+ * cut, and the scoring pass already ranks importance — falling back to
+ * `created_at` for the articles it has not reached yet.
+ */
+export async function listArticlesByDate(params: {
+  feed?: FeedType | "all";
+  from?: string;
+  to?: string;
+  limit: number;
+}): Promise<ArticleRow[]> {
+  const { feed, from, to, limit } = params;
+
+  return (await db.execute(sql`
+    SELECT a.slug, a.title, a.summary, a.date, a.source_domain, a.feed, a.story_group
+    FROM articles a
+    WHERE true${retrievalScope({ feed, from, to })}
+    ORDER BY a.date DESC, a.relevance_score DESC NULLS LAST, a.created_at DESC
+    LIMIT ${limit}
+  `)) as unknown as ArticleRow[];
 }
 
 /**

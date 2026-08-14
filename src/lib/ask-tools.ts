@@ -26,14 +26,14 @@ export const askTools = [
     type: "function",
     name: "search_articles",
     description:
-      "Search the reader's own news archive. Returns matching articles with a short summary each. Use this before answering any question about the news — it is the only way to see what the reader has actually collected. Call it more than once with different wording if the first results are thin.",
+      "Search the reader's own news archive. Returns matching articles with a short summary each. Use this before answering any question about the news — it is the only way to see what the reader has actually collected. Call it more than once with different wording if the first results are thin. Omit query and pass a date range instead to list what the archive holds for a period, newest first — that is how to answer 'what happened today' or 'summarise this week', which topic search cannot do.",
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            "What to search for. Natural language works; so do specific names and terms.",
+            "What to search for. Natural language works; so do specific names and terms. Omit it to list a period rather than search for a topic.",
         },
         feed: {
           type: "string",
@@ -53,7 +53,7 @@ export const askTools = [
           description: "How many articles to return. Defaults to 12, maximum 30.",
         },
       },
-      required: ["query"],
+      required: [],
     },
   },
   {
@@ -98,27 +98,62 @@ function asFeed(value: unknown): FeedType | undefined {
   return s && (FEEDS as string[]).includes(s) ? (s as FeedType) : undefined;
 }
 
+/**
+ * The feed and date narrowing a call asked for, as a phrase.
+ *
+ * Empty when the call named neither, so callers append it conditionally rather
+ * than printing an empty parenthesis.
+ */
+function describeScope(feed?: FeedType, from?: string, to?: string): string {
+  const period =
+    from && to
+      ? from === to
+        ? from
+        : `${from} to ${to}`
+      : from
+        ? `since ${from}`
+        : to
+          ? `up to ${to}`
+          : "";
+
+  return [feed, period].filter(Boolean).join(", ");
+}
+
 async function runSearch(args: Record<string, unknown>): Promise<ToolExecution> {
   const query = asString(args.query);
-  if (!query) {
-    return { output: "Error: query is required.", detail: "search with no query" };
+  const feed = asFeed(args.feed);
+  const from = asDate(args.from);
+  const to = asDate(args.to);
+
+  // With neither a topic nor a window this would list the newest twelve
+  // articles in the archive, which is a plausible answer to almost nothing and
+  // costs the reader a step chip reading “everything”.
+  if (!query && !from && !to && !feed) {
+    return {
+      output:
+        "Error: give a query, or a date range (and optionally a feed) to list a period.",
+      detail: "search with no query or range",
+    };
   }
 
   const limitRaw = typeof args.limit === "number" ? args.limit : undefined;
 
-  const articles = await retrieveArticles({
-    query,
-    feed: asFeed(args.feed),
-    from: asDate(args.from),
-    to: asDate(args.to),
-    limit: limitRaw,
-  });
+  const articles = await retrieveArticles({ query, feed, from, to, limit: limitRaw });
+
+  // What the call asked for, said twice: once for the step chip the reader
+  // sees, once inside the model-facing text so a result names its own scope
+  // rather than floating free of the question that produced it.
+  const scope = describeScope(feed, from, to);
+  const label = query ? `“${query}”${scope ? ` (${scope})` : ""}` : scope;
+  const asked = query ? `"${query}"${scope ? ` within ${scope}` : ""}` : scope;
 
   if (articles.length === 0) {
     return {
-      output: `No articles found for "${query}".`,
+      output: query
+        ? `Nothing in the archive matched ${asked}. That may mean the archive does not cover it, or that it is filed under different wording.`
+        : `The archive holds no articles for ${asked}.`,
       articles: [],
-      detail: `“${query}” — nothing found`,
+      detail: `${label} — nothing found`,
     };
   }
 
@@ -134,9 +169,9 @@ async function runSearch(args: Record<string, unknown>): Promise<ToolExecution> 
     .join("\n\n");
 
   return {
-    output: `${articles.length} article(s) for "${query}":\n\n${output}`,
+    output: `${articles.length} article(s) for ${asked}${query ? "" : ", newest first"}:\n\n${output}`,
     articles,
-    detail: `“${query}” — ${articles.length} article${articles.length === 1 ? "" : "s"}`,
+    detail: `${label} — ${articles.length} article${articles.length === 1 ? "" : "s"}`,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   ST_FEED_URL,
 } from "./types";
 import { extractSourceId } from "./articles";
+import { ARCHIVE_TZ } from "./dates";
 
 const parser = new RSSParser();
 
@@ -188,7 +189,7 @@ async function fetchRSSArticles(options: RSSFeedOptions): Promise<RawArticle[]> 
 
       // Parse pubDate to YYYY-MM-DD in SGT
       const pubDate = item.pubDate ? new Date(item.pubDate) : new Date();
-      const date = pubDate.toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+      const date = pubDate.toLocaleDateString("en-CA", { timeZone: ARCHIVE_TZ });
 
       const rawSummary = item.contentSnippet || item.content || item.title;
       const summary = transformSummary ? transformSummary(rawSummary) : rawSummary;
