@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
+import { withoutNode, type MarkdownProps } from "./markdown-shared";
 import { Alert } from "@heroui/react/alert";
 import { Button } from "@heroui/react/button";
 import { Modal } from "@heroui/react/modal";
@@ -12,7 +13,7 @@ import type { Article } from "@/lib/types";
 import { shareViaTelegram } from "@/lib/telegram";
 import { downloadMarkdown, downloadPdf } from "@/lib/download";
 
-function CodeBlock(props: ComponentPropsWithoutRef<"pre">) {
+function CodeBlock(props: MarkdownProps<"pre">) {
   const codeRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
@@ -26,7 +27,7 @@ function CodeBlock(props: ComponentPropsWithoutRef<"pre">) {
 
   return (
     <div ref={codeRef} className="relative group">
-      <pre {...props} />
+      <pre {...withoutNode(props)} />
       <button
         onClick={handleCopy}
         className="absolute top-[1.5rem] right-[1.5rem] p-2 rounded-md bg-white/80 border border-border text-muted hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
@@ -49,7 +50,7 @@ function CodeBlock(props: ComponentPropsWithoutRef<"pre">) {
 
 const ALLOWED_EMBED_HOSTS = ["flo.uri.sh", "datawrapper.dwcdn.net"];
 
-function EmbedIframe({ width: _w, height: _h, style: _s, ...props }: ComponentPropsWithoutRef<"iframe">) { // eslint-disable-line @typescript-eslint/no-unused-vars -- destructured to omit from props spread
+function EmbedIframe({ node: _n, width: _w, height: _h, style: _s, ...props }: MarkdownProps<"iframe">) { // eslint-disable-line @typescript-eslint/no-unused-vars -- destructured to omit from props spread
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
   const src = props.src || "";

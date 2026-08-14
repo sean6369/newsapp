@@ -80,7 +80,8 @@ Answering:
 
 Formatting:
 - Use ### for section headers and #### for sub-headers. Never use # or ##.
-- Use bullet points for lists.`;
+- Use bullet points for lists.
+- Tables are fine for a genuine comparison. Prefer few columns to many, since the reader's column is narrow — but use the ones the comparison actually needs.`;
 }
 
 export function buildSystemPrompt(markdown: string, meta: Article): string {
@@ -119,5 +120,6 @@ Citing sources:
 
 Formatting:
 - Use ### for section headers and #### for sub-headers. Never use # or ##.
-- Use bullet points for lists.`;
+- Use bullet points for lists.
+- Tables are fine for a genuine comparison. Prefer few columns to many, since the reader's column is narrow — but use the ones the comparison actually needs.`;
 }
