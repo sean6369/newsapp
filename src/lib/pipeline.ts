@@ -112,6 +112,11 @@ export async function runFetchPipeline(options?: {
   );
 
   const newArticles: RawArticle[] = [];
+  // Days whose grouping this run could have invalidated — see `matchStories`.
+  // A retitled article contributes its *stored* date, which is not necessarily
+  // `targetDate`: TLDR re-checks yesterday's digest on every run, so a run can
+  // touch a day other than the one it set out to fetch.
+  const affectedDates = new Set<string>();
   let metadataUpdates = 0;
   for (const a of unique) {
     const existing = bySourceId.get(a.sourceId) ?? bySourceUrl.get(a.sourceUrl);
@@ -135,6 +140,8 @@ export async function runFetchPipeline(options?: {
           metadataUpdates++;
 
           if (titleChanged) {
+            // Only a title change can alter matching; a new URL cannot.
+            affectedDates.add(existing.date);
             console.log(`[pipeline] Title updated: "${existing.title}" → "${a.title}" (slug unchanged: ${existing.slug})`);
           }
           if (urlChanged) {
@@ -170,7 +177,7 @@ export async function runFetchPipeline(options?: {
 
   // 3. Clip and insert to database. Scoring is deferred to phase 2 so articles
   //    appear in the app immediately instead of waiting on rate-limited Gemini calls.
-  let scoreTargets: { slug: string; raw: RawArticle }[] = [];
+  let scoreTargets: { slug: string; date: string; raw: RawArticle }[] = [];
   if (newArticles.length > 0) {
     console.log(`[pipeline] Processing ${newArticles.length} new articles...`);
 
@@ -190,23 +197,24 @@ export async function runFetchPipeline(options?: {
         console.log(`[pipeline] Duplicate slug "${article.slug}"`);
         return null;
       }
-      return { slug: article.slug, raw: rawArticle };
+      return { slug: article.slug, date: article.date, raw: rawArticle };
     });
 
     scoreTargets = inserted.filter(
-      (t): t is { slug: string; raw: RawArticle } => t !== null
+      (t): t is { slug: string; date: string; raw: RawArticle } => t !== null
     );
+    for (const t of scoreTargets) affectedDates.add(t.date);
   } else {
     console.log("[pipeline] No new articles to process");
   }
 
   // 4. Match stories across sources (CNA ↔ ST). Kept in phase 1 so grouping is
   //    done before the response and is visible as soon as new articles slide
-  //    in. It hits no external API, but it is not cheap: a loop of self-joins
-  //    evaluating title similarity over every same-day pair, ~1s per query and
-  //    at least two queries per run. Cost grows with (articles per day)², so
-  //    revisit this placement if daily volume climbs.
-  await matchStories();
+  //    in. It hits no external API, and is scoped to the days this run actually
+  //    touched — a run that found nothing new does no work here at all, which
+  //    is the common case for the hourly cron and for a feed remount. Cost
+  //    still grows with (articles per day)² on a day that does gain articles.
+  await matchStories([...affectedDates]);
 
   // Phase 2: relevance scoring. Deferred so the caller can
   // run it after sending the response (HTTP route) or inline (scheduler).

@@ -1,4 +1,4 @@
-import { eq, ne, desc, asc, ilike, or, and, sql, isNull, inArray } from "drizzle-orm";
+import { eq, ne, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL } from "drizzle-orm";
 import { db } from "./index";
 import { articles } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
@@ -223,7 +223,12 @@ export async function updateArticleEmbedding(
     .where(eq(articles.slug, slug));
 }
 
-type ExistingArticleRow = { slug: string; title: string; sourceUrl: string };
+/**
+ * `date` is carried so a title change can tell `matchStories` which day to
+ * re-examine — the stored date, not the incoming one, since that is the day
+ * this article is matched within.
+ */
+type ExistingArticleRow = { slug: string; title: string; sourceUrl: string; date: string };
 
 export async function getExistingArticles(
   sourceIds: string[],
@@ -232,7 +237,7 @@ export async function getExistingArticles(
   bySourceId: Map<string, ExistingArticleRow>;
   bySourceUrl: Map<string, ExistingArticleRow>;
 }> {
-  const cols = { slug: articles.slug, title: articles.title, sourceUrl: articles.sourceUrl, sourceId: articles.sourceId };
+  const cols = { slug: articles.slug, title: articles.title, sourceUrl: articles.sourceUrl, sourceId: articles.sourceId, date: articles.date };
   const bySourceId = new Map<string, ExistingArticleRow>();
   const bySourceUrl = new Map<string, ExistingArticleRow>();
 
@@ -410,6 +415,69 @@ function searchRowToArticle(r: SearchRow): SearchResultArticle {
 }
 
 /**
+ * Fills in copies of a story that ranked below the page boundary.
+ *
+ * `groupByStory` can only collapse what the page contains, so a card's source
+ * switcher ends up holding whichever copies happened to rank inside the LIMIT
+ * — measurably understating a story on the first page, since the remaining
+ * copies usually match the query perfectly well and simply sorted lower. One
+ * batched lookup completes each group so the switcher reflects the story
+ * rather than the pagination.
+ *
+ * Scoped by the caller's filters, unlike the Ask path's `getStoryOutlets`:
+ * these are whole articles the reader can open, so a feed or date filter has
+ * to hold. Naming an out-of-scope outlet is informational; surfacing an
+ * out-of-scope article is not.
+ */
+async function completeStoryGroups(
+  results: (SearchResultArticle & { relatedArticles?: SearchResultArticle[] })[],
+  scopeFilter: SQL,
+  /** Null on the fuzzy path, where there is no tsquery to highlight with. */
+  query: string | null
+): Promise<void> {
+  const byGroup = new Map<string, SearchResultArticle & { relatedArticles?: SearchResultArticle[] }>();
+  const shown = new Set<string>();
+  for (const a of results) {
+    shown.add(a.slug);
+    for (const rel of a.relatedArticles ?? []) shown.add(rel.slug);
+    if (a.storyGroup && !byGroup.has(a.storyGroup)) byGroup.set(a.storyGroup, a);
+  }
+  if (byGroup.size === 0) return;
+
+  const groupList = sql.join([...byGroup.keys()].map((g) => sql`${g}`), sql`, `);
+  const shownList = sql.join([...shown].map((s) => sql`${s}`), sql`, `);
+
+  // Highlighting the extra copies keeps them consistent with the rows that came
+  // through the ranked query; on the fuzzy path there is no query to highlight.
+  const ranked = query
+    ? sql`
+        WITH q AS (SELECT websearch_to_tsquery('english', ${query}) AS tsq)
+        SELECT ${searchColumns},
+          COALESCE(ts_rank_cd(a.search_vector, q.tsq), 0)::real AS rank,
+          ts_headline('english', ${snippetSource}, q.tsq, ${HEADLINE_OPTIONS}) AS snippet,
+          ts_headline('english', a.title, q.tsq, ${TITLE_HEADLINE_OPTIONS}) AS title_snippet,
+          0::int AS full_count
+        FROM articles a CROSS JOIN q`
+    : sql`
+        SELECT ${searchColumns}, 0::real AS rank,
+          NULL::text AS snippet, NULL::text AS title_snippet, 0::int AS full_count
+        FROM articles a`;
+
+  const rows = (await db.execute(sql`
+    ${ranked}
+    WHERE a.story_group IN (${groupList})
+      AND a.slug NOT IN (${shownList})${scopeFilter}
+    ORDER BY a.story_group, a.created_at DESC
+  `)) as unknown as SearchRow[];
+
+  for (const row of rows) {
+    const primary = row.story_group ? byGroup.get(row.story_group) : undefined;
+    if (!primary) continue;
+    primary.relatedArticles = [...(primary.relatedArticles ?? []), searchRowToArticle(row)];
+  }
+}
+
+/**
  * Search every article, all dates, via the weighted `search_vector` GIN index.
  *
  * Accepts websearch syntax — `"quoted phrases"`, `-exclusions`, `or` — and
@@ -451,8 +519,10 @@ export async function searchArticles(
   `)) as unknown as SearchRow[];
 
   if (ftsRows.length > 0) {
+    const results = groupByStory(ftsRows.map(searchRowToArticle));
+    await completeStoryGroups(results, scopeFilter, trimmed);
     return {
-      results: groupByStory(ftsRows.map(searchRowToArticle), feed),
+      results,
       total: Number(ftsRows[0].full_count),
       rowCount: ftsRows.length,
       mode: "fts",
@@ -500,8 +570,10 @@ export async function searchArticles(
 
   if (fuzzyRows.length === 0) return { results: [], total: 0, rowCount: 0, mode: "empty" };
 
+  const fuzzyResults = groupByStory(fuzzyRows.map(searchRowToArticle));
+  await completeStoryGroups(fuzzyResults, scopeFilter, null);
   return {
-    results: groupByStory(fuzzyRows.map(searchRowToArticle), feed),
+    results: fuzzyResults,
     total: Number(fuzzyRows[0].full_count),
     rowCount: fuzzyRows.length,
     mode: "fuzzy",
@@ -509,14 +581,33 @@ export async function searchArticles(
 }
 
 /**
- * How far back story matching looks. `articles.date` is text in `YYYY-MM-DD`,
- * where lexicographic order matches chronological order, so comparing as text
- * keeps `idx_articles_date` usable — casting the column to `date` per row would
- * not.
+ * Groups articles that cover the same story, scoped to the given `YYYY-MM-DD`
+ * dates — the days this run actually touched.
+ *
+ * Scoping by affected date rather than a rolling window is what keeps this
+ * affordable. Matching only ever pairs articles *within* one day, so a group
+ * can only change on a day that gained an article or had one's title rewritten;
+ * every other day is provably settled and re-examining it is pure waste. That
+ * waste was the dominant cost: `story_group IS NULL` reads like a small
+ * work-list but is the permanent state of every article that is simply unique
+ * (~87% of the table), so a rolling window re-compared thousands of settled
+ * singletons on every run — ~500ms of it, hourly and on every feed mount, to
+ * accomplish nothing. With no affected dates this now does no work at all.
+ *
+ * Callers must pass the *stored* date of anything they changed, which for a
+ * retitled article is not necessarily the date being fetched.
  */
-const RECENT_CUTOFF = sql`to_char(CURRENT_DATE - 3, 'YYYY-MM-DD')`;
+export async function matchStories(dates: string[]): Promise<number> {
+  const targetDates = [...new Set(dates)];
+  if (targetDates.length === 0) return 0;
 
-export async function matchStories(): Promise<number> {
+  // Parameterised one-per-date rather than interpolated, so a date string can
+  // never reach the query as SQL.
+  const dateList = sql.join(
+    targetDates.map((d) => sql`${d}`),
+    sql`, `
+  );
+
   let totalMatched = 0;
 
   // Run matching in passes until no new articles are grouped.
@@ -528,22 +619,23 @@ export async function matchStories(): Promise<number> {
       WITH best_match AS (
         SELECT DISTINCT ON (a.slug)
           a.slug AS ungrouped_slug,
-          COALESCE(
-            b.story_group,
-            CASE WHEN COALESCE(a.relevance_score, 0) > COALESCE(b.relevance_score, 0) THEN a.slug
-                 WHEN COALESCE(b.relevance_score, 0) > COALESCE(a.relevance_score, 0) THEN b.slug
-                 ELSE LEAST(a.slug, b.slug) END
-          ) AS target_group
+          -- Join the match's group if it has one, otherwise mint a key from the
+          -- pair. Which of the two slugs becomes the key carries no meaning: it
+          -- is an opaque identity for the group, never read as a ranking. Who
+          -- represents a story on screen is decided downstream by sort position
+          -- (groupByStory) or fused rank (collapseStories), so LEAST is chosen
+          -- purely because it is deterministic.
+          COALESCE(b.story_group, LEAST(a.slug, b.slug)) AS target_group
         FROM articles a
         JOIN articles b ON a.slug <> b.slug
           AND a.date = b.date
           AND similarity(a.title, b.title) >
             CASE WHEN a.source_domain = b.source_domain THEN 0.7 ELSE 0.5 END
         WHERE a.story_group IS NULL
-          AND a.date >= ${RECENT_CUTOFF}
+          AND a.date IN (${dateList})
           -- Implied by a.date = b.date, but stating it lets the planner bound
           -- both sides with idx_articles_date instead of scanning all of b.
-          AND b.date >= ${RECENT_CUTOFF}
+          AND b.date IN (${dateList})
         ORDER BY a.slug,
           b.story_group IS NOT NULL DESC,
           similarity(a.title, b.title) DESC
@@ -568,6 +660,10 @@ export async function matchStories(): Promise<number> {
         WHERE a.story_group = parent.slug
           AND parent.story_group IS NOT NULL
           AND a.story_group <> parent.story_group
+          -- Safe to scope like the other two statements: keys only ever come
+          -- from same-day pairs, so a group never spans dates and the parent
+          -- row is always on the same day as the row being normalised.
+          AND a.date IN (${dateList})
       `);
     }
 
@@ -587,8 +683,8 @@ export async function matchStories(): Promise<number> {
             CASE WHEN a.source_domain = b.source_domain THEN 0.7 ELSE 0.5 END
         WHERE a.story_group IS NOT NULL
           AND b.story_group IS NOT NULL
-          AND a.date >= ${RECENT_CUTOFF}
-          AND b.date >= ${RECENT_CUTOFF}
+          AND a.date IN (${dateList})
+          AND b.date IN (${dateList})
         ORDER BY GREATEST(a.story_group, b.story_group)
       )
       UPDATE articles
@@ -611,12 +707,33 @@ export async function deleteArticle(slug: string): Promise<void> {
   await db.delete(articles).where(eq(articles.slug, slug));
 }
 
-export async function getArticlesByStoryGroup(storyGroup: string): Promise<Article[]> {
-  const rows = await db
-    .select(articleColumns)
-    .from(articles)
-    .where(eq(articles.storyGroup, storyGroup));
-  return rows.map((r) => rowToArticle(r));
+/**
+ * Every outlet that carried each of the given stories.
+ *
+ * Retrieval can only observe the copies that ranked, which is a poor proxy for
+ * who covered a story: a second outlet's article often fails to match the
+ * question's wording and drops out, leaving the model told that one outlet
+ * reported something two did. Corroboration is exactly the signal it should
+ * not have to infer from ranking, so it is read from the group directly.
+ *
+ * Deliberately unscoped by feed or date: this returns outlet names, not
+ * articles, and "who else ran this" is true regardless of what the caller
+ * filtered to.
+ */
+export async function getStoryOutlets(
+  storyGroups: string[]
+): Promise<Map<string, string[]>> {
+  const groups = [...new Set(storyGroups)];
+  if (groups.length === 0) return new Map();
+
+  const rows = (await db.execute(sql`
+    SELECT story_group, array_agg(DISTINCT source_domain) AS domains
+    FROM articles
+    WHERE story_group IN (${sql.join(groups.map((g) => sql`${g}`), sql`, `)})
+    GROUP BY story_group
+  `)) as unknown as { story_group: string; domains: string[] }[];
+
+  return new Map(rows.map((r) => [r.story_group, r.domains]));
 }
 
 // ── Hybrid retrieval (semantic + lexical) ─────────────────────────────

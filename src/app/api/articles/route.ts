@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     getLastFetchTime(),
   ]);
 
-  const articles = groupByStory(rawArticles, filters.feed);
+  const articles = groupByStory(rawArticles);
 
   return NextResponse.json({ articles, dates, lastFetchTime });
 }

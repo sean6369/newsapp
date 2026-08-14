@@ -38,6 +38,16 @@ export const articles = pgTable(
     clipped: boolean("clipped").default(false).notNull(),
     content: text("content"),
     relevanceScore: real("relevance_score"),
+    /**
+     * Which story an article belongs to, shared by every article covering it.
+     * The value is one member's slug, but treat it as opaque: it is only ever
+     * compared for equality, and deleting that member leaves the survivors
+     * pointing at a slug that no longer exists. Never join it to `slug`.
+     *
+     * Null is the normal resting state — most articles are the only report of
+     * their story. Assigned by `matchStories`, which groups only within a
+     * single `date`, so a group never spans days.
+     */
     storyGroup: text("story_group"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     sourceId: text("source_id"),

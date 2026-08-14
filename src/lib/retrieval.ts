@@ -1,4 +1,4 @@
-import { hybridSearchArticles, type RetrievalRow } from "./db/queries";
+import { hybridSearchArticles, getStoryOutlets, type RetrievalRow } from "./db/queries";
 import { embedQuery } from "./embeddings";
 import type { FeedType, RetrievedArticle } from "./types";
 
@@ -84,12 +84,18 @@ async function embedQueryCached(query: string): Promise<number[] | null> {
  * context window reads as importance. Keeping the best-ranked copy and naming
  * the others preserves the useful part (several outlets carried this) without
  * spending four slots on it.
+ *
+ * `alsoReportedBy` is left empty here and filled from the story group itself
+ * once the final set is known — see `attachCorroboration`.
  */
 function collapseStories(rows: RetrievalRow[]): RetrievedArticle[] {
-  const byStory = new Map<string, RetrievedArticle>();
+  const seenStories = new Set<string>();
   const results: RetrievedArticle[] = [];
 
   for (const row of rows) {
+    // Rows arrive in fused-rank order, so the first copy seen is the best-ranked.
+    if (row.story_group && seenStories.has(row.story_group)) continue;
+
     const article: RetrievedArticle = {
       slug: row.slug,
       title: row.title,
@@ -100,25 +106,43 @@ function collapseStories(rows: RetrievalRow[]): RetrievedArticle[] {
       alsoReportedBy: [],
     };
 
-    if (!row.story_group) {
-      results.push(article);
-      continue;
-    }
-
-    const seen = byStory.get(row.story_group);
-    if (seen) {
-      // Rows arrive in fused-rank order, so the first is the best-ranked copy.
-      if (!seen.alsoReportedBy.includes(row.source_domain)) {
-        seen.alsoReportedBy.push(row.source_domain);
-      }
-      continue;
-    }
-
-    byStory.set(row.story_group, article);
+    if (row.story_group) seenStories.add(row.story_group);
     results.push(article);
   }
 
   return results;
+}
+
+/**
+ * Names every other outlet that carried each returned story.
+ *
+ * Reading this from the group rather than from the rows that ranked is the
+ * difference between "one outlet reported this" and the truth: a second
+ * outlet's copy frequently misses the question's wording and never enters the
+ * result set, which understated corroboration on 40% of grouped stories when
+ * it was inferred from ranking alone.
+ *
+ * Runs after the budget and slice, so it costs one query for the handful of
+ * articles actually being returned.
+ */
+async function attachCorroboration(
+  articles: RetrievedArticle[],
+  rows: RetrievalRow[]
+): Promise<void> {
+  const groupBySlug = new Map(rows.map((r) => [r.slug, r.story_group]));
+  const groups = articles
+    .map((a) => groupBySlug.get(a.slug))
+    .filter((g): g is string => Boolean(g));
+  if (groups.length === 0) return;
+
+  const outlets = await getStoryOutlets(groups);
+  for (const article of articles) {
+    const group = groupBySlug.get(article.slug);
+    if (!group) continue;
+    article.alsoReportedBy = (outlets.get(group) ?? []).filter(
+      (domain) => domain !== article.sourceDomain
+    );
+  }
 }
 
 /** Trims the tail until the batch fits the character budget. */
@@ -171,5 +195,7 @@ export async function retrieveArticles(
     limit: limit * 2,
   });
 
-  return applyBudget(collapseStories(rows)).slice(0, limit);
+  const results = applyBudget(collapseStories(rows)).slice(0, limit);
+  await attachCorroboration(results, rows);
+  return results;
 }

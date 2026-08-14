@@ -24,6 +24,7 @@ import type {
   SearchSortMode,
 } from "@/lib/types";
 import { SEARCH_PAGE_SIZE, DEFAULT_SEARCH_SORT } from "@/lib/types";
+import { mergeStoryPage } from "@/lib/group-stories";
 import { ArticleTimeline, formatShortDate, toDateStr } from "./ArticleTimeline";
 import { FeedFilter, MobileSettings } from "./FeedFilter";
 import { SEARCH_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
@@ -214,15 +215,7 @@ export function SearchPage({
       });
       if (!res.ok) throw new Error("Search failed");
       const data = await res.json();
-      setResults((prev) => {
-        // Grouping runs per page, so a story straddling the page boundary can
-        // come back again as its own result. Drop anything already shown.
-        const seen = new Set(prev.map((a) => a.slug));
-        return [
-          ...prev,
-          ...(data.results as SearchResultArticle[]).filter((a) => !seen.has(a.slug)),
-        ];
-      });
+      setResults((prev) => mergeStoryPage(prev, data.results as SearchResultArticle[]));
       setRowsLoaded((prev) => prev + data.rowCount);
     } catch {
       // Aborted, or the request failed. Either way nothing was applied — leave
