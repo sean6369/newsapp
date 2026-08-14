@@ -6,7 +6,7 @@ import { Search, FileText } from "lucide-react";
 import { useChat } from "@/hooks/useChat";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
-import { AskArticleCard } from "./AskArticleCard";
+import { AskArticleGroups } from "./AskArticleGroups";
 import {
   HERO_OFFSET,
   HERO_WIDTH_LOW,
@@ -89,6 +89,10 @@ function StepChip({ step }: { step: AskStep }) {
  */
 export function AskPage() {
   const [initialMessages] = useState<ChatMessageType[]>(loadStored);
+  // A restored conversation arrives whole, so its cards should arrive with it
+  // rather than staggering in as though they had just been retrieved — the
+  // same reason the thread itself mounts with `initial={false}` below.
+  const [restoredIds] = useState(() => new Set(initialMessages.map((m) => m.id)));
   const reduceMotion = useReducedMotion();
   const { messages, sendMessage, isStreaming, isSearching, error, clearMessages } = useChat({
     endpoint: "/api/ask",
@@ -188,44 +192,58 @@ export function AskPage() {
                   : { duration: 0.28, delay: SEQ_MESSAGE_DELAY, ease: heroEaseCurve }
               }
             >
-              {messages.map((message, i) => (
-                <div key={message.id} className="space-y-3">
-                  {/* Inside the reply, above its own working — a reply that has
-                      not started is still the thing happening under the
-                      question just asked. Rendered after the list instead, it
-                      sank below the retrieval steps and article cards, so the
-                      one element saying "something is happening" ended up
-                      furthest from the question that started it. */}
-                  {isStreaming &&
-                    i === messages.length - 1 &&
-                    message.role === "assistant" &&
-                    message.content === "" && (
-                      <div className="font-serif text-base italic">
-                        <span className="thinking-shimmer">
-                          {isSearching ? "Searching the web..." : "Thinking..."}
-                        </span>
+              {messages.map((message, i) => {
+                const stillArriving = isStreaming && i === messages.length - 1;
+
+                return (
+                  <div key={message.id} className="space-y-3">
+                    {/* Inside the reply, above its own working — a reply that
+                        has not started is still the thing happening under the
+                        question just asked. Rendered after the list instead, it
+                        sank below the retrieval steps and article cards, so the
+                        one element saying "something is happening" ended up
+                        furthest from the question that started it. */}
+                    {stillArriving &&
+                      message.role === "assistant" &&
+                      message.content === "" && (
+                        <div className="font-serif text-base italic">
+                          <span className="thinking-shimmer">
+                            {isSearching ? "Searching the web..." : "Thinking..."}
+                          </span>
+                        </div>
+                      )}
+
+                    {/* The steps do run live, unlike the cards below. They are
+                        the answer being worked on rather than part of it, and
+                        they are all there is to see during the seconds before
+                        any text arrives. */}
+                    {message.steps && message.steps.length > 0 && (
+                      <div className="space-y-1">
+                        {message.steps.map((step, i) => (
+                          <StepChip key={i} step={step} />
+                        ))}
                       </div>
                     )}
 
-                  {message.steps && message.steps.length > 0 && (
-                    <div className="space-y-1">
-                      {message.steps.map((step, i) => (
-                        <StepChip key={i} step={step} />
-                      ))}
-                    </div>
-                  )}
+                    <ChatMessage message={message} />
 
-                  <ChatMessage message={message} />
-
-                  {message.articles && message.articles.length > 0 && (
-                    <div className="grid gap-2 pt-1 sm:grid-cols-2">
-                      {message.articles.map((article, i) => (
-                        <AskArticleCard key={article.slug} article={article} index={i} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                    {/* Held until the answer is whole, like the sources beneath
+                        it. Which articles were cited is not knowable before
+                        then, and cards that appear mid-answer only to regroup
+                        at the end of it are movement the reader has to ignore
+                        twice. */}
+                    {!stillArriving && message.articles && message.articles.length > 0 && (
+                      <div className="pt-1">
+                        <AskArticleGroups
+                          articles={message.articles}
+                          content={message.content}
+                          entrance={!restoredIds.has(message.id)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               {error && (
                 <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>

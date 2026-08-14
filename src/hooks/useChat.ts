@@ -202,9 +202,12 @@ export function useChat({
                 pendingSourcesRef.current = parsed.sources;
               }
               // Retrieval steps and their articles bypass the token queue.
-              // They describe work already done, and holding them behind the
-              // drip would show the reader an answer citing articles whose
-              // cards had not appeared yet.
+              // Both describe work already done rather than an answer being
+              // typed out, but it is the steps that need it: they are all the
+              // reader has to look at during the seconds before any text
+              // arrives. The articles ride along and are held by `AskPage`
+              // until the reply is complete, which is the earliest it can group
+              // them by which ones the answer cited.
               if (parsed.step) {
                 setIsSearching(false);
                 appendToAssistant((last) => ({

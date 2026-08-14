@@ -24,13 +24,20 @@ const CARD_HEIGHT = "h-[148px]";
 export function AskArticleCard({
   article,
   index,
+  entrance = true,
 }: {
   article: RetrievedArticle;
   index: number;
+  /**
+   * False for a conversation restored from session storage, which arrives
+   * whole — nothing was retrieved just now, so nothing should look as if it
+   * were.
+   */
+  entrance?: boolean;
 }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 4 }}
+      initial={entrance ? { opacity: 0, y: 4 } : false}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: Math.min(index * 0.03, 0.3), ease: "easeOut" }}
     >
