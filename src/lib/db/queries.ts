@@ -632,6 +632,23 @@ export async function searchArticles(
   // fuzzy fallback, and `completeStoryGroups`.
   const scopeFilter = sql`${libraryFilter}${feedFilter}${fromFilter}${toFilter}`;
 
+  // `source_domain` is not part of `search_vector`, so searching by outlet
+  // ("straitstimes", "channelnewsasia") matches nothing on the vector alone.
+  // The feed's own box has carried this fallback since it was written; this
+  // page went without, which left the more capable search the only one that
+  // could not filter by source.
+  //
+  // `idx_articles_domain_trgm` is what makes the leading wildcard affordable:
+  // for a selective outlet the planner resolves the OR as a BitmapOr across it
+  // and the tsvector index. For one that carries most of the archive it drops
+  // to a sequential scan instead, which is correct rather than a regression —
+  // reading 60% of the table through an index is the slower way to do it.
+  //
+  // A domain-only hit scores 0 from `ts_rank_cd`, so these sort below genuine
+  // text matches and fall back to date order among themselves — which is the
+  // right shape for "show me everything from this outlet".
+  const domainMatch = sql`a.source_domain ILIKE ${`%${trimmed.replace(/[\%_]/g, "\$&")}%`}`;
+
   const orderBy =
     sort === "date-asc"
       ? sql`ORDER BY a.date ASC, a.created_at ASC`
@@ -647,7 +664,7 @@ export async function searchArticles(
       ts_headline('english', a.title, q.tsq, ${TITLE_HEADLINE_OPTIONS}) AS title_snippet,
       COUNT(*) OVER ()::int AS full_count
     FROM articles a CROSS JOIN q
-    WHERE a.search_vector @@ q.tsq${scopeFilter}
+    WHERE (a.search_vector @@ q.tsq OR ${domainMatch})${scopeFilter}
     ${orderBy}
     LIMIT ${limit} OFFSET ${offset}
   `)) as unknown as SearchRow[];
@@ -671,7 +688,8 @@ export async function searchArticles(
       numnode(websearch_to_tsquery('english', ${trimmed}))::int AS nodes,
       EXISTS (
         SELECT 1 FROM articles a
-        WHERE a.search_vector @@ websearch_to_tsquery('english', ${trimmed})${scopeFilter}
+        WHERE (a.search_vector @@ websearch_to_tsquery('english', ${trimmed})
+               OR ${domainMatch})${scopeFilter}
       ) AS has_match
   `)) as unknown as Array<{ nodes: number; has_match: boolean }>;
 
