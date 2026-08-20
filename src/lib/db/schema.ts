@@ -36,6 +36,31 @@ export const articles = pgTable(
     date: text("date").notNull(),
     readingTime: integer("reading_time").default(0).notNull(),
     clipped: boolean("clipped").default(false).notNull(),
+    /**
+     * True for anything in the reader's library, however it got there.
+     *
+     * Deliberately *not* the same question as "did the pipeline fetch this".
+     * An article can be both a Straits Times story in Thursday's feed and one
+     * the reader kept, and an earlier version of this column tried to mean both
+     * things at once — which made saving a feed article impossible to express,
+     * since flagging it would have deleted it from the feed it still belongs
+     * to.
+     *
+     * Origin is recorded by `feed` instead: `library` there means the reader
+     * pasted it and no RSS feed carries it. That is what the home page,
+     * scoring, embedding, and the Ask retrieval filter on — via `pipelineOnly`
+     * / `PIPELINE_ONLY` in `queries.ts`, which is the only place to add it.
+     * This column is what `/library` lists.
+     */
+    library: boolean("library").default(false).notNull(),
+    /**
+     * When the reader added it to their library. Null for everything else.
+     *
+     * `created_at` cannot order the library once feed articles can be saved:
+     * for those it records when the pipeline ingested the story, so an article
+     * from last week saved this morning would sort a week down the page.
+     */
+    savedAt: timestamp("saved_at"),
     content: text("content"),
     relevanceScore: real("relevance_score"),
     /**
@@ -86,5 +111,9 @@ export const articles = pgTable(
     // rebuilds as the corpus grows, and under-performs a sequential scan at
     // this size. HNSW needs neither.
     index("idx_articles_embedding").using("hnsw", t.embedding.op("vector_cosine_ops")),
+    // Partial: the library is a handful of rows in a table of news, and this is
+    // the only query that wants them. Indexing `saved_at` under the predicate
+    // means the library page is an index scan already in its display order.
+    index("idx_articles_library").on(t.savedAt).where(sql`library`),
   ]
 );

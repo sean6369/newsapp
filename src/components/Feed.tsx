@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { ToggleButtonGroup, ToggleButton } from "@heroui/react";
 import { useArticles } from "@/hooks/useArticles";
-import { FeedFilter, FeedSearch, FeedSort, MobileSettings } from "@/components/FeedFilter";
+import { FeedFilter, FeedSearch, FeedSort, MobileSettings, ViewToggle } from "@/components/FeedFilter";
 import { DateNav } from "@/components/DateNav";
 import { ArticleGrid, type ViewMode } from "@/components/ArticleGrid";
 import { FEED_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
@@ -66,30 +65,7 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
             filters={filters}
             onFilterChange={setFilters}
           />
-          <ToggleButtonGroup
-            selectionMode="single"
-            selectedKeys={new Set([view])}
-            onSelectionChange={(keys) => {
-              const selected = [...keys][0] as ViewMode | undefined;
-              if (selected) handleViewChange(selected);
-            }}
-          >
-            <ToggleButton id="grid" aria-label="Grid view">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
-                <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
-                <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
-                <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
-              </svg>
-            </ToggleButton>
-            <ToggleButton id="list" aria-label="List view">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="1" y1="3" x2="15" y2="3" />
-                <line x1="1" y1="8" x2="15" y2="8" />
-                <line x1="1" y1="13" x2="15" y2="13" />
-              </svg>
-            </ToggleButton>
-          </ToggleButtonGroup>
+          <ViewToggle view={view} onViewChange={handleViewChange} />
         </div>
       </div>
 

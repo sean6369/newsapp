@@ -75,6 +75,11 @@ export function buildArticle(
     date: rawArticle.date,
     readingTime: rawArticle.readingTime,
     clipped: clippedContent !== null,
+    // The pipeline only ever builds feed articles; clips are built in
+    // `lib/library.ts`, which sets these the other way. A feed article can
+    // still be saved later — that flips `library` without coming back here.
+    library: false,
+    savedAt: null,
     relevanceScore: null,
     storyGroup: null,
     createdAt: new Date().toISOString(),

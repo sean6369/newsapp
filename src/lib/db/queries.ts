@@ -2,8 +2,30 @@ import { eq, ne, gte, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL 
 import { db } from "./index";
 import { articles } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
-import type { Article, ArticleFilters, FeedType, SearchFilters, SearchResponse, SearchResultArticle } from "../types";
+import { LIBRARY_FEED, type Article, type ArticleFilters, type FeedType, type SearchFilters, type SearchResponse, type SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
+
+/**
+ * "The pipeline fetched this", for drizzle's query builder.
+ *
+ * Origin, not membership. Every query behind the home feed, the Ask retrieval,
+ * and the scoring and embedding passes carries it, because all of them are
+ * about the archive the app gathers: a page the reader pasted was never in a
+ * feed, has no publication day worth filing under, and should not spend the
+ * Gemini quota the day's news needs.
+ *
+ * What it deliberately does *not* test is `articles.library`. A saved Straits
+ * Times story is in the reader's library and still in Thursday's feed, still
+ * scored, still groupable with the other outlets that ran it — testing the
+ * flag here would drop it out of all of that the moment it was saved.
+ *
+ * Queries that address one row by slug (the reader, chat, the exports) carry
+ * neither: there the caller already knows which article it wants.
+ */
+const pipelineOnly = ne(articles.feed, LIBRARY_FEED);
+
+/** The same filter for the raw-SQL queries, appended to an existing `WHERE`. */
+const PIPELINE_ONLY = sql` AND a.feed <> ${LIBRARY_FEED}`;
 
 const articleColumns = {
   slug: articles.slug,
@@ -16,6 +38,8 @@ const articleColumns = {
   date: articles.date,
   readingTime: articles.readingTime,
   clipped: articles.clipped,
+  library: articles.library,
+  savedAt: articles.savedAt,
   relevanceScore: articles.relevanceScore,
   storyGroup: articles.storyGroup,
   createdAt: articles.createdAt,
@@ -40,6 +64,8 @@ export async function insertArticle(
       date: article.date,
       readingTime: article.readingTime,
       clipped: article.clipped,
+      library: article.library,
+      savedAt: article.savedAt ? new Date(article.savedAt) : null,
       relevanceScore: article.relevanceScore,
       sourceId: article.sourceId,
       content,
@@ -74,7 +100,7 @@ export async function getArticleContent(
 export async function queryArticles(
   filters: ArticleFilters
 ): Promise<Article[]> {
-  const conditions = [];
+  const conditions: (SQL | undefined)[] = [pipelineOnly];
 
   if (filters.feed && filters.feed !== "all") {
     conditions.push(eq(articles.feed, filters.feed));
@@ -106,7 +132,7 @@ export async function queryArticles(
   const rows = await db
     .select(articleColumns)
     .from(articles)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .where(and(...conditions))
     .orderBy(...orderBy);
 
   return rows.map((r) => rowToArticle(r));
@@ -116,15 +142,28 @@ export async function getLastFetchTime(): Promise<string | null> {
   const rows = await db
     .select({ createdAt: articles.createdAt })
     .from(articles)
+    .where(pipelineOnly)
     .orderBy(desc(articles.createdAt))
     .limit(1);
   return rows[0]?.createdAt?.toISOString() ?? null;
 }
 
-export async function getArticleDates(): Promise<string[]> {
+/**
+ * Every day the archive holds an article for, newest first.
+ *
+ * Clips are excluded by default because the caller that matters most is the
+ * feed's date navigator, and a clip saved today would put a day on it that
+ * holds no news. Search asks for them: its calendar bounds the days you can
+ * filter to, so leaving clips out would make the library scope unfilterable
+ * on exactly the dates it has articles.
+ */
+export async function getArticleDates(
+  options?: { includeLibrary?: boolean }
+): Promise<string[]> {
   const rows = await db
     .selectDistinct({ date: articles.date })
     .from(articles)
+    .where(options?.includeLibrary ? undefined : pipelineOnly)
     .orderBy(desc(articles.date));
   return rows.map((r) => r.date);
 }
@@ -140,7 +179,10 @@ const scoringColumns = {
 };
 
 export async function getUnscoredArticles(): Promise<ArticleForScoring[]> {
-  return db.select(scoringColumns).from(articles).where(isNull(articles.relevanceScore));
+  return db
+    .select(scoringColumns)
+    .from(articles)
+    .where(and(isNull(articles.relevanceScore), pipelineOnly));
 }
 
 /**
@@ -162,13 +204,13 @@ export async function getRecentUnscoredArticles(
   return db
     .select(scoringColumns)
     .from(articles)
-    .where(and(isNull(articles.relevanceScore), gte(articles.date, sinceDate)))
+    .where(and(isNull(articles.relevanceScore), gte(articles.date, sinceDate), pipelineOnly))
     .orderBy(desc(articles.date))
     .limit(limit);
 }
 
 export async function getAllArticlesForScoring(): Promise<ArticleForScoring[]> {
-  return db.select(scoringColumns).from(articles);
+  return db.select(scoringColumns).from(articles).where(pipelineOnly);
 }
 
 export async function updateRelevanceScore(
@@ -206,7 +248,10 @@ export async function getUnembeddedArticles(): Promise<ArticleForEmbedding[]> {
     .select(embeddingColumns)
     .from(articles)
     .where(
-      or(isNull(articles.embedding), ne(articles.embeddingModel, EMBEDDING_MODEL))
+      and(
+        or(isNull(articles.embedding), ne(articles.embeddingModel, EMBEDDING_MODEL)),
+        pipelineOnly
+      )
     )
     // Newest first, so a backfill interrupted partway through has still
     // covered the articles most likely to be asked about.
@@ -239,7 +284,8 @@ export async function getRecentUnembeddedArticles(
     .where(
       and(
         or(isNull(articles.embedding), ne(articles.embeddingModel, EMBEDDING_MODEL)),
-        gte(articles.date, sinceDate)
+        gte(articles.date, sinceDate),
+        pipelineOnly
       )
     )
     .orderBy(desc(articles.date))
@@ -250,6 +296,7 @@ export async function getAllArticlesForEmbedding(): Promise<ArticleForEmbedding[
   return db
     .select(embeddingColumns)
     .from(articles)
+    .where(pipelineOnly)
     .orderBy(sql`${articles.embeddedAt} ASC NULLS FIRST`);
 }
 
@@ -295,7 +342,10 @@ export async function getExistingArticles(
   if (sourceIds.length === 0) return { bySourceId, bySourceUrl };
 
   // Primary: batch lookup by sourceId
-  const byId = await db.select(cols).from(articles).where(inArray(articles.sourceId, sourceIds));
+  const byId = await db
+    .select(cols)
+    .from(articles)
+    .where(and(inArray(articles.sourceId, sourceIds), pipelineOnly));
   const matchedSourceIds = new Set<string>();
   for (const r of byId) {
     if (!r.sourceId) continue;
@@ -306,7 +356,10 @@ export async function getExistingArticles(
   // Fallback: batch lookup by sourceUrl for unmatched articles (pre-backfill rows)
   const unmatchedUrls = sourceUrls.filter((_, i) => !matchedSourceIds.has(sourceIds[i]));
   if (unmatchedUrls.length > 0) {
-    const byUrl = await db.select(cols).from(articles).where(inArray(articles.sourceUrl, unmatchedUrls));
+    const byUrl = await db
+      .select(cols)
+      .from(articles)
+      .where(and(inArray(articles.sourceUrl, unmatchedUrls), pipelineOnly));
     for (const r of byUrl) {
       bySourceUrl.set(r.sourceUrl, r);
     }
@@ -349,6 +402,8 @@ function rowToArticle(row: {
   date: string;
   readingTime: number;
   clipped: boolean;
+  library: boolean;
+  savedAt: Date | null;
   relevanceScore: number | null;
   storyGroup: string | null;
   createdAt: Date;
@@ -362,10 +417,12 @@ function rowToArticle(row: {
     sourceDomain: row.sourceDomain,
     summary: row.summary,
     category: row.category,
-    feed: row.feed as "tech" | "ai" | "singapore" | "world" | "asia" | "finance",
+    feed: row.feed as FeedType,
     date: row.date,
     readingTime: row.readingTime,
     clipped: row.clipped,
+    library: row.library,
+    savedAt: row.savedAt?.toISOString() ?? null,
     relevanceScore: row.relevanceScore,
     storyGroup: row.storyGroup,
     createdAt: row.createdAt.toISOString(),
@@ -403,7 +460,7 @@ const TITLE_HEADLINE_OPTIONS =
 
 const searchColumns = sql`
   a.slug, a.title, a.source_url, a.source_domain, a.summary, a.category,
-  a.feed, a.date, a.reading_time, a.clipped, a.relevance_score,
+  a.feed, a.date, a.reading_time, a.clipped, a.library, a.saved_at, a.relevance_score,
   a.story_group, a.created_at, a.source_id, a.updated_at
 `;
 
@@ -418,6 +475,8 @@ type SearchRow = {
   date: string;
   reading_time: number;
   clipped: boolean;
+  library: boolean;
+  saved_at: string | null;
   relevance_score: number | null;
   story_group: string | null;
   created_at: string;
@@ -453,6 +512,8 @@ function searchRowToArticle(r: SearchRow): SearchResultArticle {
       date: r.date,
       readingTime: r.reading_time,
       clipped: r.clipped,
+      library: r.library,
+      savedAt: r.saved_at ? parseNaiveTimestamp(r.saved_at) : null,
       relevanceScore: r.relevance_score,
       storyGroup: r.story_group,
       createdAt: parseNaiveTimestamp(r.created_at),
@@ -544,10 +605,32 @@ export async function searchArticles(
   const trimmed = query.trim();
   if (!trimmed) return { results: [], total: 0, rowCount: 0, mode: "empty" };
 
-  const feedFilter = feed && feed !== "all" ? sql` AND a.feed = ${feed}` : sql``;
   const fromFilter = from ? sql` AND a.date >= ${from}` : sql``;
   const toFilter = to ? sql` AND a.date <= ${to}` : sql``;
-  const scopeFilter = sql`${feedFilter}${fromFilter}${toFilter}`;
+
+  // `library` is a scope, not a feed. It reads `articles.library` —
+  // membership, not the origin `pipelineOnly` tests — because a saved Straits
+  // Times story is in the library every bit as much as a pasted page, and
+  // scoping by origin would hide exactly the articles this scope exists to
+  // find.
+  //
+  // Nothing is excluded on the other paths. "All" means all, pasted pages
+  // included: this is the one page where a reader is looking for an article
+  // rather than reading the day's news, and a page they saved is as valid an
+  // answer as a fetched one. A named feed (`tech`, `world`) still leaves
+  // pasted pages out on its own, since none of them carries that feed.
+  //
+  // Search is alone in this. The home feed and the Ask retrieval exclude them
+  // unconditionally via `pipelineOnly` and `retrievalScope` — that is where the
+  // separation lives, and nothing here touches it.
+  const searchingLibrary = feed === LIBRARY_FEED;
+  const feedFilter =
+    feed && feed !== "all" && !searchingLibrary ? sql` AND a.feed = ${feed}` : sql``;
+  const libraryFilter = searchingLibrary ? sql` AND a.library = true` : sql``;
+
+  // Every arm below inherits this: the ranked query, the no-results probe, the
+  // fuzzy fallback, and `completeStoryGroups`.
+  const scopeFilter = sql`${libraryFilter}${feedFilter}${fromFilter}${toFilter}`;
 
   const orderBy =
     sort === "date-asc"
@@ -683,6 +766,12 @@ export async function matchStories(dates: string[]): Promise<number> {
           AND similarity(a.title, b.title) >
             CASE WHEN a.source_domain = b.source_domain THEN 0.7 ELSE 0.5 END
         WHERE a.story_group IS NULL
+          -- A pasted page has no story to belong to: it is not coverage, and
+          -- grouping it with the news would surface it in the feed through the
+          -- matched article's source switcher. Origin, not membership — a
+          -- saved feed article is still ordinary coverage and still groups.
+          AND a.feed <> 'library'
+          AND b.feed <> 'library'
           AND a.date IN (${dateList})
           -- Implied by a.date = b.date, but stating it lets the planner bound
           -- both sides with idx_articles_date instead of scanning all of b.
@@ -756,6 +845,97 @@ export async function matchStories(dates: string[]): Promise<number> {
 
 export async function deleteArticle(slug: string): Promise<void> {
   await db.delete(articles).where(eq(articles.slug, slug));
+}
+
+// ── Library ───────────────────────────────────────────────────────────
+
+/**
+ * Everything in the reader's library, most recently saved first.
+ *
+ * Both kinds: pages pasted on `/library` and feed articles the reader kept,
+ * which is why it tests `library` rather than the origin `pipelineOnly` reads.
+ *
+ * Unfiltered and unpaginated, unlike the feed — the library is what one person
+ * chose to keep, so it is small by construction and showing all of it is the
+ * point. `idx_articles_library` is a partial index on `saved_at`, so this reads
+ * in display order without a sort.
+ */
+export async function getLibraryArticles(
+  options?: { search?: string }
+): Promise<Article[]> {
+  const conditions: (SQL | undefined)[] = [eq(articles.library, true)];
+
+  const search = options?.search?.trim();
+  if (search) {
+    // The same matching the feed's own search box uses, for the same reason:
+    // `search_vector` is a generated column, so a clip has been indexed over
+    // its full body since the moment it was stored, and a title-only filter
+    // would ignore the part of it worth searching. The domain check is the
+    // same fallback too — `source_domain` is not in the vector, so without it
+    // you could not find a clip by where it came from.
+    conditions.push(
+      or(
+        sql`${articles.searchVector} @@ websearch_to_tsquery('english', ${search})`,
+        ilike(articles.sourceDomain, `%${search.replace(/[\\%_]/g, "\\$&")}%`)
+      )
+    );
+  }
+
+  const rows = await db
+    .select(articleColumns)
+    .from(articles)
+    .where(and(...conditions))
+    // By when it was saved, not when it was created: for a saved feed article
+    // `created_at` is when the pipeline ingested the story, which would file
+    // last week's news a week down a library it entered this morning.
+    .orderBy(desc(articles.savedAt));
+  return rows.map((r) => rowToArticle(r));
+}
+
+/**
+ * Adds an article the pipeline already fetched to the reader's library.
+ *
+ * Only sets the flag — the row keeps its feed, its score, its story group and
+ * its place in the archive. Being kept by the reader says nothing about
+ * whether it is also Thursday's news.
+ */
+export async function addToLibrary(slug: string): Promise<void> {
+  await db
+    .update(articles)
+    .set({ library: true, savedAt: new Date() })
+    .where(eq(articles.slug, slug));
+}
+
+/**
+ * Takes an article out of the library.
+ *
+ * Unsaving, not deleting — the caller decides which it wants. A pasted page
+ * exists only because it was saved, so removing it from the library should
+ * delete it; a feed article outlives its stay here and must survive.
+ */
+export async function removeFromLibrary(slug: string): Promise<void> {
+  await db
+    .update(articles)
+    .set({ library: false, savedAt: null })
+    .where(eq(articles.slug, slug));
+}
+
+/**
+ * The article stored under a URL, pasted or fetched, if there is one.
+ *
+ * `source_url` is uniquely indexed, so the same URL cannot be stored twice.
+ * This is how the clip route learns that *before* fetching the page, and can
+ * save the row it already has instead of failing on a constraint.
+ */
+export async function getArticleBySourceUrl(
+  sourceUrl: string
+): Promise<Article | null> {
+  const rows = await db
+    .select(articleColumns)
+    .from(articles)
+    .where(eq(articles.sourceUrl, sourceUrl))
+    .limit(1);
+  return rows[0] ? rowToArticle(rows[0]) : null;
 }
 
 /**
@@ -859,7 +1039,7 @@ function retrievalScope(params: {
   const feedFilter = feed && feed !== "all" ? sql` AND a.feed = ${feed}` : sql``;
   const fromFilter = from ? sql` AND a.date >= ${from}` : sql``;
   const toFilter = to ? sql` AND a.date <= ${to}` : sql``;
-  return sql`${feedFilter}${fromFilter}${toFilter}`;
+  return sql`${PIPELINE_ONLY}${feedFilter}${fromFilter}${toFilter}`;
 }
 
 /**
@@ -986,8 +1166,9 @@ export async function getCorpusCoverage(): Promise<{
   total: number;
 } | null> {
   const rows = (await db.execute(sql`
-    SELECT MIN(date) AS earliest, MAX(date) AS latest, COUNT(*)::int AS total
-    FROM articles
+    SELECT MIN(a.date) AS earliest, MAX(a.date) AS latest, COUNT(*)::int AS total
+    FROM articles a
+    WHERE true${PIPELINE_ONLY}
   `)) as unknown as Array<{ earliest: string | null; latest: string | null; total: number }>;
 
   const row = rows[0];

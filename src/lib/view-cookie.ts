@@ -1,12 +1,13 @@
 import type { ViewMode } from "@/components/ArticleGrid";
 
 /**
- * Grid/list preference, persisted so a reload doesn't reset it. The feed and
- * search keep separate cookies: they open on different defaults (grid vs list)
- * and a choice made while searching shouldn't rewrite the home feed's layout.
+ * Grid/list preference, persisted so a reload doesn't reset it. Each page keeps
+ * its own cookie: they open on different defaults (grid vs list) and a choice
+ * made while searching shouldn't rewrite the home feed's layout.
  */
 export const FEED_VIEW_COOKIE = "feed-view";
 export const SEARCH_VIEW_COOKIE = "search-view";
+export const LIBRARY_VIEW_COOKIE = "library-view";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 

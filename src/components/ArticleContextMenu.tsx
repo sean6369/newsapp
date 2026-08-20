@@ -14,9 +14,15 @@ interface ArticleContextMenuProps {
   children: (menuTrigger: React.ReactNode, setActiveSlug: (slug: string) => void) => React.ReactNode;
   onRescore?: (slug: string) => void;
   onDelete?: (slug: string) => void;
+  /**
+   * Wording for the destructive item. The library overrides it for a saved
+   * feed article, where the action only unsaves — the row, and the article's
+   * place in the feed, both survive.
+   */
+  deleteLabel?: string;
 }
 
-export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, children, onRescore, onDelete }: ArticleContextMenuProps) {
+export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, children, onRescore, onDelete, deleteLabel = "Delete" }: ArticleContextMenuProps) {
   const slugRef = useRef(slug);
   const sourceUrlRef = useRef(sourceUrl);
   const sourceDomainRef = useRef(sourceDomain);
@@ -153,19 +159,24 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
               >
                 Download
               </button>
-              <button
-                type="button"
-                onClick={handleRescore}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-accent/10 transition-colors cursor-pointer"
-              >
-                Rescore
-              </button>
+              {/* Only where a score means something. The library never scores
+                  its articles, so offering to redo it would be an action that
+                  changes nothing the reader can see. */}
+              {onRescore && (
+                <button
+                  type="button"
+                  onClick={handleRescore}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-accent/10 transition-colors cursor-pointer"
+                >
+                  Rescore
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleDelete}
                 className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
               >
-                Delete
+                {deleteLabel}
               </button>
             </motion.div>
           )}

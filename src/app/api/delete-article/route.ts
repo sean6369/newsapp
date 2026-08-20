@@ -10,7 +10,14 @@ export async function POST(request: NextRequest) {
 
   await deleteArticle(slug);
 
-  console.log(`[delete-article] ${article.title.slice(0, LOG_TITLE_LEN)}`);
+  console.log(
+    `[delete-article] ${article.title.slice(0, LOG_TITLE_LEN)}` +
+      (article.library ? " (was in the library)" : "")
+  );
 
-  return NextResponse.json({ slug });
+  // This is a hard delete of the row, so an article the reader had saved goes
+  // with it. Reported rather than prevented — deleting from the feed means
+  // "remove this article", and the library page has its own gentler removal —
+  // but the reader should not have to notice on their own.
+  return NextResponse.json({ slug, wasInLibrary: article.library });
 }

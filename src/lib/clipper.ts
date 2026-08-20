@@ -69,9 +69,19 @@ turndown.addRule("details-summary", {
   },
 });
 
-interface ClipResult {
+export interface ClipResult {
   content: string;
   title: string;
+  /**
+   * The page's own one-line description, when it publishes one.
+   *
+   * Feed articles arrive with a summary from the RSS item or the TLDR digest,
+   * so nothing here used to need it. A pasted link has no such envelope — the
+   * URL is all the reader gives us — and this is the only summary available
+   * that costs neither a model call nor a guess. Empty when the page offers
+   * none; `lib/library.ts` falls back to the body text.
+   */
+  excerpt: string;
 }
 
 async function resolveUrl(shortUrl: string): Promise<string | null> {
@@ -182,6 +192,10 @@ async function clipArticleContent(url: string): Promise<ClipResult | null> {
 
   // Extract og:image before Readability modifies the DOM
   const ogImage = dom.window.document.querySelector('meta[property="og:image"]')?.getAttribute("content") || "";
+  const ogDescription =
+    dom.window.document.querySelector('meta[property="og:description"]')?.getAttribute("content") ||
+    dom.window.document.querySelector('meta[name="description"]')?.getAttribute("content") ||
+    "";
 
   const reader = new Readability(dom.window.document, {
     allowedVideoRegex: ALLOWED_EMBED_PATTERN,
@@ -265,6 +279,10 @@ async function clipArticleContent(url: string): Promise<ClipResult | null> {
   return {
     content: markdown,
     title: article.title || "",
+    // Readability's excerpt is usually the meta description anyway, but it
+    // falls back to the article's first paragraph when the page has none,
+    // which is the better summary of the two.
+    excerpt: (article.excerpt || ogDescription).trim(),
   };
 }
 

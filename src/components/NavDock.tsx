@@ -2,13 +2,18 @@
 
 import { usePathname } from "next/navigation";
 import { FloatingDock } from "@/components/FloatingDock";
-import { Home, Search, Sparkles } from "lucide-react";
+import { Home, Library, Search, Sparkles } from "lucide-react";
 
 const navItems = [
   {
     title: "Feed",
     icon: <Home className="h-full w-full text-foreground" />,
     href: "/",
+  },
+  {
+    title: "Library",
+    icon: <Library className="h-full w-full text-foreground" />,
+    href: "/library",
   },
   {
     title: "Search",

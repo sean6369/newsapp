@@ -215,7 +215,7 @@ export function useArticles(): UseArticlesReturn {
       body: JSON.stringify({ slug }),
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
-      .then(() => {
+      .then((body: { wasInLibrary?: boolean }) => {
         let promotedSlug: string | null = null;
         mutate(
           (current) => {
@@ -251,7 +251,14 @@ export function useArticles(): UseArticlesReturn {
           { revalidate: false }
         );
         if (promotedSlug) setLastRescoredSlug(promotedSlug);
-        toast.success("Article deleted");
+        // Deleting here removes the row outright, so a saved article is gone
+        // from the library too. Say which happened rather than letting the
+        // reader discover it later.
+        if (body.wasInLibrary) {
+          toast.warning("Article deleted — also removed from your library");
+        } else {
+          toast.success("Article deleted");
+        }
       })
       .catch((err) => {
         console.error("[delete]", err);

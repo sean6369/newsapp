@@ -2,17 +2,25 @@
 
 import type { ReactNode } from "react";
 import { Tabs, SearchField, Select, ListBox, ListBoxItem, Dropdown, Drawer, ToggleButtonGroup, ToggleButton, useOverlayState } from "@heroui/react";
-import type { ArticleFilters, FeedType } from "@/lib/types";
+import { LIBRARY_FEED, type ArticleFilters, type FeedType } from "@/lib/types";
 import type { ViewMode } from "./ArticleGrid";
 
 type FeedValue = FeedType | "all";
 
+export interface FeedOption {
+  value: FeedValue;
+  label: string;
+}
+
 interface FeedFilterProps {
   feed: FeedValue | undefined;
   onFeedChange: (feed: FeedValue) => void;
+  /** Defaults to the news feeds; search passes {@link SEARCH_FEED_OPTIONS}. */
+  options?: readonly FeedOption[];
 }
 
-const feedOptions = [
+/** The news feeds, in the order the tabs read. */
+export const FEED_OPTIONS: readonly FeedOption[] = [
   { value: "all", label: "All" },
   { value: "singapore", label: "Singapore" },
   { value: "world", label: "World" },
@@ -20,11 +28,24 @@ const feedOptions = [
   { value: "finance", label: "Finance" },
   { value: "ai", label: "AI" },
   { value: "tech", label: "Tech" },
-] as const;
+];
 
-export function FeedFilter({ feed, onFeedChange }: FeedFilterProps) {
+/**
+ * Search's tabs: the news feeds, plus the library as a scope of its own.
+ *
+ * Only search offers it. The home feed is the day's news and clips are
+ * deliberately no part of that, so a Library tab there would be a filter that
+ * can only ever come back empty. Picking it here does not narrow the news —
+ * it searches the clips *instead of* it (see `searchArticles`).
+ */
+export const SEARCH_FEED_OPTIONS: readonly FeedOption[] = [
+  ...FEED_OPTIONS,
+  { value: LIBRARY_FEED, label: "Library" },
+];
+
+export function FeedFilter({ feed, onFeedChange, options = FEED_OPTIONS }: FeedFilterProps) {
   const currentFeed = feed || "all";
-  const currentLabel = feedOptions.find((o) => o.value === currentFeed)?.label ?? "All";
+  const currentLabel = options.find((o) => o.value === currentFeed)?.label ?? "All";
 
   return (
     <>
@@ -37,7 +58,7 @@ export function FeedFilter({ feed, onFeedChange }: FeedFilterProps) {
         >
           <Tabs.ListContainer>
             <Tabs.List aria-label="Feed filter">
-              {feedOptions.map((opt) => (
+              {options.map((opt) => (
                 <Tabs.Tab key={opt.value} id={opt.value} className="min-w-20 px-0">
                   {opt.label}
                   <Tabs.Indicator />
@@ -66,7 +87,7 @@ export function FeedFilter({ feed, onFeedChange }: FeedFilterProps) {
                 if (selected) onFeedChange(selected);
               }}
             >
-              {feedOptions.map((opt) => (
+              {options.map((opt) => (
                 <Dropdown.Item key={opt.value} id={opt.value}>
                   {opt.label}
                 </Dropdown.Item>
@@ -116,6 +137,43 @@ export function FeedSort({ filters, onFilterChange }: FeedSortProps) {
   );
 }
 
+interface SearchInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  "aria-label"?: string;
+}
+
+/**
+ * The toolbar search box, shared by every page that has one.
+ *
+ * Split out from {@link FeedSearch} so the library can use it: that page has
+ * no `ArticleFilters` to thread through, just a string, and a second copy of
+ * this markup would be one more place for the two to drift apart.
+ */
+export function SearchInput({
+  value,
+  onChange,
+  placeholder = "Search...",
+  "aria-label": ariaLabel = "Search articles",
+}: SearchInputProps) {
+  return (
+    <SearchField
+      aria-label={ariaLabel}
+      className="flex-1 min-w-0 md:flex-none"
+      value={value}
+      onChange={onChange}
+      onClear={() => onChange("")}
+    >
+      <SearchField.Group>
+        <SearchField.SearchIcon />
+        <SearchField.Input className="w-full md:w-48" placeholder={placeholder} />
+        <SearchField.ClearButton />
+      </SearchField.Group>
+    </SearchField>
+  );
+}
+
 interface FeedSearchProps {
   filters: ArticleFilters;
   onFilterChange: (filters: Partial<ArticleFilters>) => void;
@@ -123,19 +181,55 @@ interface FeedSearchProps {
 
 export function FeedSearch({ filters, onFilterChange }: FeedSearchProps) {
   return (
-    <SearchField
-      aria-label="Search articles"
-      className="flex-1 min-w-0 md:flex-none"
+    <SearchInput
       value={filters.search || ""}
       onChange={(value) => onFilterChange({ search: value || undefined })}
-      onClear={() => onFilterChange({ search: undefined })}
+    />
+  );
+}
+
+/**
+ * Grid/list switch. Lives here rather than inline in each toolbar so the two
+ * icons are drawn once — they were already duplicated between the feed's
+ * toolbar and the mobile settings drawer.
+ */
+export function ViewToggle({
+  view,
+  onViewChange,
+  onSelected,
+}: {
+  view: ViewMode;
+  onViewChange: (view: ViewMode) => void;
+  /** Fired after a change, so the mobile drawer can close itself. */
+  onSelected?: () => void;
+}) {
+  return (
+    <ToggleButtonGroup
+      selectionMode="single"
+      selectedKeys={new Set([view])}
+      onSelectionChange={(keys) => {
+        const selected = [...keys][0] as ViewMode | undefined;
+        if (!selected) return;
+        onViewChange(selected);
+        onSelected?.();
+      }}
     >
-      <SearchField.Group>
-        <SearchField.SearchIcon />
-        <SearchField.Input className="w-full md:w-48" placeholder="Search..." />
-        <SearchField.ClearButton />
-      </SearchField.Group>
-    </SearchField>
+      <ToggleButton id="grid" aria-label="Grid view">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
+          <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
+          <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
+          <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
+        </svg>
+      </ToggleButton>
+      <ToggleButton id="list" aria-label="List view">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <line x1="1" y1="3" x2="15" y2="3" />
+          <line x1="1" y1="8" x2="15" y2="8" />
+          <line x1="1" y1="13" x2="15" y2="13" />
+        </svg>
+      </ToggleButton>
+    </ToggleButtonGroup>
   );
 }
 
@@ -217,33 +311,11 @@ export function MobileSettings({
                   {/* View */}
                   <div>
                     <h3 className="text-xs font-medium uppercase tracking-wider text-muted mb-3">View</h3>
-                    <ToggleButtonGroup
-                      selectionMode="single"
-                      selectedKeys={new Set([view])}
-                      onSelectionChange={(keys) => {
-                        const selected = [...keys][0] as ViewMode | undefined;
-                        if (selected) {
-                          onViewChange(selected);
-                          drawerState.close();
-                        }
-                      }}
-                    >
-                      <ToggleButton id="grid" aria-label="Grid view">
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                          <rect x="1" y="1" width="5.5" height="5.5" rx="1" />
-                          <rect x="9.5" y="1" width="5.5" height="5.5" rx="1" />
-                          <rect x="1" y="9.5" width="5.5" height="5.5" rx="1" />
-                          <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1" />
-                        </svg>
-                      </ToggleButton>
-                      <ToggleButton id="list" aria-label="List view">
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                          <line x1="1" y1="3" x2="15" y2="3" />
-                          <line x1="1" y1="8" x2="15" y2="8" />
-                          <line x1="1" y1="13" x2="15" y2="13" />
-                        </svg>
-                      </ToggleButton>
-                    </ToggleButtonGroup>
+                    <ViewToggle
+                      view={view}
+                      onViewChange={onViewChange}
+                      onSelected={drawerState.close}
+                    />
                   </div>
                 </div>
               </Drawer.Body>

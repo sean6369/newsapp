@@ -5,6 +5,12 @@ export const feedColor: Record<string, string> = {
   world: "text-neutral-900 dark:text-neutral-100",
   asia: "text-purple-600",
   finance: "text-blue-600",
+  // Cyan for the separation, not for the meaning — the app's accent suited a
+  // clip better but sat at hue 39°, between singapore (27°) and ai (48°) and
+  // ΔE 0.12 from each, tighter than any two of these tags already are (0.155,
+  // ai vs singapore). That only matters where they appear side by side, which
+  // is search. Cyan takes the one wide gap left, between green and blue.
+  library: "text-cyan-700",
 };
 
 export function scoreColor(score: number | null): string {

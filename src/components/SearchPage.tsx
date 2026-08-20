@@ -26,7 +26,7 @@ import type {
 import { SEARCH_PAGE_SIZE, DEFAULT_SEARCH_SORT } from "@/lib/types";
 import { mergeStoryPage } from "@/lib/group-stories";
 import { ArticleTimeline, formatShortDate, toDateStr } from "./ArticleTimeline";
-import { FeedFilter, MobileSettings } from "./FeedFilter";
+import { FeedFilter, MobileSettings, SEARCH_FEED_OPTIONS } from "./FeedFilter";
 import { SEARCH_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
 import { SearchSnippet, HighlightedText } from "./SearchSnippet";
 import type { ViewMode } from "./ArticleGrid";
@@ -429,7 +429,7 @@ export function SearchPage({
               onAnimationComplete={() => setToolbarSettled(true)}
             >
               <div className="flex items-center gap-2 pb-6">
-                <FeedFilter feed={feed} onFeedChange={setFeed} />
+                <FeedFilter feed={feed} onFeedChange={setFeed} options={SEARCH_FEED_OPTIONS} />
 
                 <div className="flex-1" />
 

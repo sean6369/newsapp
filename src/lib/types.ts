@@ -1,4 +1,16 @@
-export type FeedType = "tech" | "ai" | "singapore" | "world" | "asia" | "finance";
+/**
+ * Which section an article belongs to.
+ *
+ * `library` is the odd one out: it is not a source the pipeline fetches but the
+ * bucket every hand-clipped article lands in, so it never appears in the feed
+ * filter's tabs or in the feeds the Ask tools can scope to. It exists in the
+ * union because `articles.feed` is `NOT NULL` and a clip has to say something
+ * honest there.
+ */
+export type FeedType = "tech" | "ai" | "singapore" | "world" | "asia" | "finance" | "library";
+
+/** The `feed` value every hand-clipped article carries. */
+export const LIBRARY_FEED = "library" as const;
 
 export interface RawArticle {
   title: string;
@@ -22,6 +34,14 @@ export interface Article {
   date: string;
   readingTime: number;
   clipped: boolean;
+  /**
+   * True when the article is in the reader's library. Independent of where it
+   * came from — a feed article can be saved without leaving the feed. Origin
+   * is `feed === LIBRARY_FEED`.
+   */
+  library: boolean;
+  /** When it was added to the library; null if it never was. */
+  savedAt: string | null;
   relevanceScore: number | null;
   storyGroup: string | null;
   createdAt: string;

@@ -18,7 +18,9 @@ export default async function SearchRoute({
 
   const [initial, dates, cookieStore] = await Promise.all([
     searchArticles({ query, limit: SEARCH_PAGE_SIZE, sort: DEFAULT_SEARCH_SORT }),
-    getArticleDates(),
+    // Includes the library's dates: they bound the calendar, and the Library
+    // scope is searchable from this page.
+    getArticleDates({ includeLibrary: true }),
     cookies(),
   ]);
 
