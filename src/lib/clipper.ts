@@ -3,6 +3,7 @@ import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 // @ts-expect-error -- no type declarations for turndown-plugin-gfm
 import { gfm } from "turndown-plugin-gfm";
+import { ALLOWED_EMBED_PATTERN } from "./markdown-sanitize";
 
 const turndown = new TurndownService({
   headingStyle: "atx",
@@ -12,6 +13,24 @@ const turndown = new TurndownService({
 
 // GFM support: tables, strikethrough, task lists
 turndown.use(gfm);
+
+/**
+ * Escape `<` in text so quoted markup stays quoted.
+ *
+ * Turndown escapes the markdown syntax characters (`*`, backtick, `[`, `_`, …)
+ * but has no rule for `<`, and Readability hands it text with entities already
+ * decoded. So a page that merely *writes about* HTML — "the payload is
+ * `<img src=x onerror=…>`" — stores a literal tag, and `rehype-raw` downstream
+ * promotes it to a real element: the words vanish from the sentence and become
+ * markup in the reader.
+ *
+ * `\<` is a CommonMark backslash escape, so the character survives as text
+ * through every renderer. Applied only to text nodes — Turndown passes code
+ * through unescaped, so fenced blocks are untouched, and the `keep-iframes`
+ * rule below emits its tag as a replacement rather than as escaped text.
+ */
+const escapeMarkdown = turndown.escape.bind(turndown);
+turndown.escape = (text: string) => escapeMarkdown(text).replace(/</g, "\\<");
 
 // Preserve trusted iframes as raw HTML in markdown
 turndown.addRule("keep-iframes", {
@@ -165,7 +184,7 @@ async function clipArticleContent(url: string): Promise<ClipResult | null> {
   const ogImage = dom.window.document.querySelector('meta[property="og:image"]')?.getAttribute("content") || "";
 
   const reader = new Readability(dom.window.document, {
-    allowedVideoRegex: /flo\.uri\.sh|datawrapper\.dwcdn\.net/,
+    allowedVideoRegex: ALLOWED_EMBED_PATTERN,
   });
   const article = reader.parse();
 

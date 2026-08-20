@@ -5,7 +5,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import { withoutNode, type MarkdownProps } from "./markdown-shared";
+import { ALLOWED_EMBED_HOSTS, articleSchema } from "@/lib/markdown-sanitize";
 import { Alert } from "@heroui/react/alert";
 import { Button } from "@heroui/react/button";
 import { Modal } from "@heroui/react/modal";
@@ -47,8 +49,6 @@ function CodeBlock(props: MarkdownProps<"pre">) {
     </div>
   );
 }
-
-const ALLOWED_EMBED_HOSTS = ["flo.uri.sh", "datawrapper.dwcdn.net"];
 
 function EmbedIframe({ node: _n, width: _w, height: _h, style: _s, ...props }: MarkdownProps<"iframe">) { // eslint-disable-line @typescript-eslint/no-unused-vars -- destructured to omit from props spread
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -272,7 +272,7 @@ export function ArticleReader({ article, content, onToggleChat, chatOpen }: Arti
 
       {/* Article content */}
       <article className="prose md:prose-lg max-w-none prose-article prose-headings:text-foreground prose-p:text-foreground prose-a:text-accent prose-strong:text-foreground prose-code:text-foreground prose-blockquote:border-accent/30 prose-blockquote:text-muted" style={stagger(5)}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, [rehypeHighlight, { detect: true, subset: ["python", "javascript", "typescript", "bash", "json", "css", "html", "sql", "rust", "go", "c", "cpp"] }]]} components={{ pre: CodeBlock, iframe: EmbedIframe }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, [rehypeSanitize, articleSchema], [rehypeHighlight, { detect: true, subset: ["python", "javascript", "typescript", "bash", "json", "css", "html", "sql", "rust", "go", "c", "cpp"] }]]} components={{ pre: CodeBlock, iframe: EmbedIframe }}>
           {content}
         </ReactMarkdown>
       </article>

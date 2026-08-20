@@ -4,17 +4,30 @@ import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkRehype from "remark-rehype";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
 import { getArticleBySlug, getArticleContent } from "@/lib/db/queries";
+import { articleSchema } from "@/lib/markdown-sanitize";
 
 const GOTENBERG_URL = process.env.GOTENBERG_URL || "http://gotenberg:3000";
 
+/**
+ * Render an article body to HTML for Gotenberg.
+ *
+ * The sanitizer is load-bearing here in a way it is not in the reader. This
+ * path stringifies to plain HTML, so none of the reader's component overrides
+ * apply — `EmbedIframe`'s host check never runs — and the result is handed to
+ * a real Chromium inside the compose network, which will execute scripts and
+ * fetch whatever a `src` points at. `articleSchema` is the only thing standing
+ * between a scraped page and that browser.
+ */
 async function markdownToHtml(markdown: string): Promise<string> {
   const result = await unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
+    .use(rehypeSanitize, articleSchema)
     .use(rehypeStringify)
     .process(markdown);
   return String(result);
