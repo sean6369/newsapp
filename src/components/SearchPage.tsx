@@ -12,8 +12,9 @@ import {
   Select,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
 } from "@heroui/react";
-import { Search as SearchIcon, X } from "lucide-react";
+import { Info, Search as SearchIcon, X } from "lucide-react";
 import { PromptField, PromptFieldButton } from "./PromptField";
 import { parseDate } from "@internationalized/date";
 import type { DateValue } from "@internationalized/date";
@@ -48,12 +49,27 @@ const sortOptions: Array<{ value: SearchSortMode; label: string }> = [
 
 // Postgres `websearch_to_tsquery` syntax — see searchArticles() in db/queries.
 // Straight quotes only: it does not recognise the typographic kind.
+//
+// The last row is not websearch syntax at all: it is the `source_domain` ILIKE
+// fallback the same function runs alongside the vector, which is the only way
+// to search by outlet from here.
+//
+// Every example is checked against the archive before it goes in. A tip that
+// returns nothing teaches nothing, and one whose filter barely moves the count
+// — `rates -crypto` cut 656 to 642, `straitstimes` returns 63% of the table —
+// teaches the opposite of its point.
+//
+// The outlet row has a second constraint: it must name an outlet the articles
+// do not talk *about*, since the vector and the domain match are OR'd into one
+// count. `bloomberg` returns 313 against 13 articles actually from Bloomberg,
+// which would show a reader the wrong thing entirely.
 const searchTips: Array<{ example: string; meaning: string }> = [
-  { example: "chip smuggling", meaning: "Both words, anywhere in the article" },
+  { example: "electric vehicles", meaning: "Both words, anywhere in the article" },
   { example: '"rate cut"', meaning: "The exact phrase, words side by side" },
   { example: "tariffs or sanctions", meaning: "Either word" },
-  { example: "rates -crypto", meaning: "Everything about rates, minus crypto" },
-  { example: '"data centre" -singapore', meaning: "Mix them freely" },
+  { example: "nvidia -chips", meaning: "Everything on Nvidia, minus the chip stories" },
+  { example: '"data centre" -singapore', meaning: "Data centres, but not the Singapore ones" },
+  { example: "techcrunch", meaning: "Everything from one outlet" },
 ];
 
 interface DateRange {
@@ -106,6 +122,7 @@ export function SearchPage({
   const [sort, setSort] = useState<SearchSortMode>(DEFAULT_SEARCH_SORT);
   const [view, setView] = useState<ViewMode>(initialView);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [tipsOpen, setTipsOpen] = useState(false);
   // Starts true so a deep link with ?q= — which renders the toolbar without
   // animating it in — is never clipped.
   const [toolbarSettled, setToolbarSettled] = useState(true);
@@ -545,27 +562,56 @@ export function SearchPage({
               Every article in the archive — titles, summaries and full text.
             </p>
 
-            <dl className="mx-auto mt-8 max-w-lg space-y-3">
-              {searchTips.map((tip) => (
-                <div
-                  key={tip.example}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 sm:flex-nowrap"
+            {/* The syntax is worth knowing but not worth a wall of text on an
+                otherwise empty page, so it hides behind one line. Controlled
+                rather than left to react-aria's hover/focus alone: a tooltip
+                that only opens on hover is unreachable on a phone, and the
+                click handler below is what gives touch a way in. */}
+            <div className="mt-4 flex justify-center">
+              <Tooltip.Root
+                isOpen={tipsOpen}
+                onOpenChange={setTipsOpen}
+                delay={150}
+                closeDelay={150}
+              >
+                <Tooltip.Trigger
+                  aria-label="Search tips"
+                  onClick={() => setTipsOpen((open) => !open)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-accent/40 hover:text-foreground"
                 >
-                  <dt className="sm:w-[45%] sm:flex-shrink-0 sm:text-right">
-                    <code className="font-mono text-xs rounded border border-border bg-card-bg px-1.5 py-0.5 text-foreground">
-                      {tip.example}
-                    </code>
-                  </dt>
-                  <dd className="text-xs text-muted">{tip.meaning}</dd>
-                </div>
-              ))}
-            </dl>
+                  <Info className="h-3.5 w-3.5" aria-hidden />
+                  Search tips
+                </Tooltip.Trigger>
+                <Tooltip.Content placement="bottom" offset={10} showArrow>
+                  <Tooltip.Arrow />
+                  {/* `.tooltip` sets `break-all`, which would split the example
+                      queries mid-word; it inherits, so the override goes here. */}
+                  <div className="w-[17rem] max-w-full break-normal p-1 text-left">
+                    <dl className="space-y-2">
+                      {searchTips.map((tip) => (
+                        <div key={tip.example}>
+                          <dt>
+                            {/* bg-background, not bg-card-bg: the tooltip's own
+                                surface is already the card white. */}
+                            <code className="font-mono rounded border border-border bg-background px-1.5 py-0.5 text-foreground">
+                              {tip.example}
+                            </code>
+                          </dt>
+                          <dd className="mt-1 text-muted">{tip.meaning}</dd>
+                        </div>
+                      ))}
+                    </dl>
 
-            <p className="mx-auto mt-8 max-w-md text-center text-xs text-muted">
-              Words match by stem, so <span className="font-mono">smuggling</span> also
-              finds <span className="font-mono">smuggled</span>. Misspell something and
-              the closest headlines come back instead.
-            </p>
+                    <p className="mt-3 border-t border-border pt-3 text-muted">
+                      Words match by stem, so{" "}
+                      <span className="font-mono">negotiating</span> also finds{" "}
+                      <span className="font-mono">negotiated</span>. Misspell something
+                      and the closest headlines come back instead.
+                    </p>
+                  </div>
+                </Tooltip.Content>
+              </Tooltip.Root>
+            </div>
           </div>
         )}
 
