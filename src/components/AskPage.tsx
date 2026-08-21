@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion, useReducedMotion } from "motion/react";
-import { Search, FileText } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { Tooltip } from "@heroui/react";
+import { Search, FileText, Info } from "lucide-react";
 import { useChat } from "@/hooks/useChat";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
@@ -55,6 +56,26 @@ const SEQ_MESSAGE_DELAY = 0.24;
  */
 const STORAGE_KEY = "ask:conversation";
 
+// The three levers a reader actually has over what gets retrieved: how much
+// time, which feed, how deep. Each row changes how you would word a question.
+//
+// Deliberately not a menu of things Ask can answer. Plain topic questions and
+// follow-ups were here and came out again — asking a chat box a question and
+// then another one is the affordance, not a tip, and rows that teach nothing
+// dilute the ones that do.
+//
+// Every row is something the model is instructed to do — see
+// buildGlobalSystemPrompt() in lib/chat and the tool descriptions in
+// lib/ask-tools. The date row leads because it is the one people get wrong:
+// asked as a topic search for the word "news", a day comes back as a 1-in-9
+// sample of itself, which is why the model is told to pass a date range and
+// no query at all.
+const askTips: Array<{ example: string; meaning: string }> = [
+  { example: "What happened today?", meaning: "A stretch of time rather than a topic — this week, or a date, work the same way" },
+  { example: "Anything in the Singapore feed on housing?", meaning: "Naming a feed narrows the search to that one" },
+  { example: "What exactly did they say about the layoffs?", meaning: "Opens the article and reads it whole, where a summary will not do" },
+];
+
 function loadStored(): ChatMessageType[] {
   if (typeof window === "undefined") return [];
   try {
@@ -64,6 +85,158 @@ function loadStored(): ChatMessageType[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * How long a greeting holds before the next one takes over.
+ *
+ * Long enough that it is not competing with the cursor for attention, short
+ * enough that a second one arrives before most people have finished deciding
+ * what to ask.
+ */
+const GREETING_ROTATE_MS = 10_000;
+
+/**
+ * The lines above the composer, by the reader's own clock.
+ *
+ * Local time, deliberately, and not the `ARCHIVE_TZ` the rest of the app dates
+ * articles by: everything else here is a statement about the archive, where
+ * Singapore days are the only ones that line up with `articles.date`, but this
+ * is a statement about the person reading. Getting it from the browser means
+ * it agrees with the window they are sitting next to.
+ *
+ * Every line closes: a full stop, or a question mark where the line asks
+ * something. Unpunctuated they read as labels rather than as someone speaking,
+ * which is the opposite of what a greeting is for. The exclamation is reserved
+ * for the plain salutation that opens each set — spread across the wry lines it
+ * would oversell them.
+ *
+ * `*asterisks*` mark the word that takes the accent — see `accentGreeting`.
+ * One per line, and never the whole line: the colour is there to give the
+ * phrase a beat, and a fully orange greeting is just a coloured greeting.
+ *
+ * Kept short on purpose. The line swaps in place inside a fixed-height slot,
+ * and one that wraps to two lines on a phone would shove the composer down
+ * every ten seconds — which puts the ceiling at roughly 26 characters, the
+ * width of a 375px screen at this size.
+ *
+ * Each set is written plain greeting first, then wry, then flatly sarcastic —
+ * though only the first line keeps its place, since `greetingsFor` shuffles
+ * everything after it. What that ordering really guarantees is that the page
+ * opens straight and the reader has to linger to be needled.
+ *
+ * The sarcastic ones are read by exactly one person: whoever owns the archive,
+ * on a page they came to voluntarily, at an hour of their choosing. Nothing
+ * here lands on anybody else, which is what makes "This is healthy." at 3am
+ * funny rather than rude.
+ *
+ * The small hours get their own set rather than being folded into the evening:
+ * someone asking at 2am has not started their day early, they have not
+ * finished the last one, and a bright "Good evening" reads as a machine that
+ * has not looked at the clock.
+ */
+function greetingPool(hour: number): string[] {
+  if (hour < 5) {
+    return [
+      "Still *up*?",
+      "The *quiet* hours.",
+      "*Late* edition.",
+      "Nothing else is *awake*.",
+      "The *night* shift.",
+      "Burning the *midnight* oil.",
+      "Sleep is a *construct*.",
+      "*Elegant* doomscrolling.",
+      "Tomorrow's *problem*.",
+      "This is *healthy*.",
+      "Nothing bad *happened*.",
+      "Well *rested*, obviously.",
+    ];
+  }
+  if (hour < 12) {
+    return [
+      "Good *morning*!",
+      "*Fresh* from the feeds.",
+      "What the night *brought*.",
+      "While you *slept*.",
+      "The morning's *catch*.",
+      "First *coffee*?",
+      "The world *survived*.",
+      "Rise and *doomscroll*.",
+      "Anything on *fire*?",
+      "All *fixed* overnight.",
+      "Everything's *fine*.",
+      "*Good* news, surely.",
+    ];
+  }
+  if (hour < 18) {
+    return [
+      "Good *afternoon*!",
+      "*Caught* up yet?",
+      "What is *developing*?",
+      "The day, so *far*.",
+      "*Midday*, mid-story.",
+      "Still *unfolding*.",
+      "Beats *working*.",
+      "Pretend it's *research*.",
+      "Better than *emails*.",
+      "*Productive*, this.",
+      "Nothing urgent, *surely*.",
+      "The *work* will keep.",
+    ];
+  }
+  return [
+    "Good *evening*!",
+    "The day, in *summary*.",
+    "What did you *miss*?",
+    "Anything still *unclear*?",
+    "*Close* out the day.",
+    "The *headlines*, distilled.",
+    "Unwind with *catastrophe*.",
+    "Bedtime *stories*.",
+    "The world, *recapped*.",
+    "*Soothing*, as ever.",
+    "Sleep well *after* this.",
+    "Nothing to worry *about*.",
+  ];
+}
+
+/**
+ * The pool in the order one visit will see it.
+ *
+ * The plain greeting always leads, so the page opens calmly and the rest
+ * arrive as the reader lingers rather than greeting them with a wisecrack.
+ * Everything after it is shuffled, because a fixed order means the reader who
+ * waits ten seconds sees the same second line every single morning — which is
+ * the boredom the variations were added to fix, only slower.
+ */
+function greetingsFor(hour: number): string[] {
+  const [first, ...rest] = greetingPool(hour);
+
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
+
+  return [first, ...rest];
+}
+
+/**
+ * Splits a greeting on its `*marked*` word, so it can be coloured.
+ *
+ * The capture group is what puts the marked words on the odd indices —
+ * `"Good *morning*"` becomes `["Good ", "morning", ""]` — which is the whole
+ * trick. A line with no asterisks simply comes back as one plain segment.
+ */
+function accentGreeting(line: string) {
+  return line.split(/\*(.+?)\*/g).map((part, i) =>
+    i % 2 === 1 ? (
+      <span key={i} className="text-accent">
+        {part}
+      </span>
+    ) : (
+      part
+    )
+  );
 }
 
 function StepChip({ step }: { step: AskStep }) {
@@ -99,6 +272,10 @@ export function AskPage() {
     initialMessages,
   });
 
+  const [tipsOpen, setTipsOpen] = useState(false);
+  const [greetings] = useState(() => greetingsFor(new Date().getHours()));
+  const [greetingIndex, setGreetingIndex] = useState(0);
+
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,6 +302,23 @@ export function AskPage() {
 
   const empty = messages.length === 0;
 
+  // Only while the page is bare. Once a conversation exists the greeting is
+  // gone, and an interval still firing behind it would be re-rendering the
+  // whole thread every ten seconds for a line nobody can see.
+  //
+  // Rotation stops entirely under `prefers-reduced-motion`: text that replaces
+  // itself in the corner of your eye is exactly the involuntary movement the
+  // setting is there to refuse, and a crossfade does not make it optional.
+  useEffect(() => {
+    if (!empty || reduceMotion) return;
+
+    const id = setInterval(
+      () => setGreetingIndex((i) => (i + 1) % greetings.length),
+      GREETING_ROTATE_MS
+    );
+    return () => clearInterval(id);
+  }, [empty, reduceMotion, greetings.length]);
+
   return (
     <div className="min-h-dvh bg-background">
       {/* Header. Outside the thread, so it stays put while the composer
@@ -134,7 +328,7 @@ export function AskPage() {
           <div>
             <h1 className="font-serif text-3xl font-medium mb-1">Ask</h1>
             <p className="text-sm text-muted">
-              Questions answered from the articles you&rsquo;ve collected.
+              Ask anything about your news.
             </p>
           </div>
           {!empty && (
@@ -264,11 +458,128 @@ export function AskPage() {
               The tint carries it alone where `backdrop-filter` is unsupported,
               which is why it is not fully transparent. */}
           <div className="sticky bottom-0 bg-background/45 pt-2 pb-24 backdrop-blur-sm md:pb-28">
+            {/* The greeting rides above the composer rather than sitting in
+                the gap above it, so it travels *with* the input on the way
+                down instead of being left behind by it — and leaves on the
+                same curve, collapsing its height rather than just fading, so
+                the composer's slide stays one movement.
+
+                Serif and unhurried: it is the only thing on the page that is
+                not an instrument. */}
+            <AnimatePresence>
+              {empty && (
+                <motion.div
+                  initial={false}
+                  exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  transition={
+                    reduceMotion ? { duration: 0 } : { duration: 0.4, ease: heroEaseCurve }
+                  }
+                  className="mb-10 overflow-hidden text-center md:mb-12"
+                >
+                  {/* A fixed slot for the line to swap inside. `mode="wait"`
+                      unmounts the old greeting before the new one mounts, so
+                      without a floor here the container would collapse to
+                      nothing between the two and kick the composer up the
+                      page every ten seconds. Matched to the line height at
+                      each breakpoint. */}
+                  <div className="flex min-h-8 items-center justify-center md:min-h-9">
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.p
+                        key={greetings[greetingIndex]}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: reduceMotion ? 0 : 0.3, ease: "easeOut" }}
+                        className="font-serif text-2xl font-medium md:text-3xl"
+                      >
+                        {accentGreeting(greetings[greetingIndex])}
+                      </motion.p>
+                    </AnimatePresence>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <ChatInput
               onSend={sendMessage}
               disabled={isStreaming}
               placeholder="Ask about your news..."
             />
+
+            {/* The empty page's one hint, in Search's position: under the
+                input, not above it. Above, it sat in the gap the composer is
+                about to travel through, so the first question had it moving
+                out of the way of the thing it was explaining.
+
+                Controlled rather than left to react-aria's hover/focus alone
+                — a tooltip that only opens on hover is unreachable on a
+                phone, and the click handler is what gives touch a way in. */}
+            <AnimatePresence>
+              {empty && (
+                <motion.div
+                  initial={false}
+                  exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                  transition={
+                    reduceMotion ? { duration: 0 } : { duration: 0.4, ease: heroEaseCurve }
+                  }
+                  className="mt-8 flex justify-center overflow-hidden md:mt-10"
+                >
+                  <Tooltip.Root
+                    isOpen={tipsOpen}
+                    onOpenChange={setTipsOpen}
+                    delay={150}
+                    closeDelay={150}
+                  >
+                    <Tooltip.Trigger
+                      aria-label="How Ask works"
+                      onClick={() => setTipsOpen((open) => !open)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-accent/40 hover:text-foreground"
+                    >
+                      <Info className="h-3.5 w-3.5" aria-hidden />
+                      How Ask works
+                    </Tooltip.Trigger>
+                    <Tooltip.Content placement="bottom" offset={10} showArrow>
+                      <Tooltip.Arrow />
+                      {/* `.tooltip` sets `break-all`, which would split the
+                          example questions mid-word; it inherits, so the
+                          override goes here. */}
+                      <div className="w-[19rem] max-w-full break-normal p-1 text-left">
+                        <dl className="space-y-2">
+                          {askTips.map((tip) => (
+                            <div key={tip.example}>
+                              {/* Questions, so they read as speech rather than
+                                  as syntax to be typed exactly — which is what
+                                  Search's boxed code examples are. */}
+                              <dt className="text-foreground">&ldquo;{tip.example}&rdquo;</dt>
+                              <dd className="mt-1 text-muted">{tip.meaning}</dd>
+                            </div>
+                          ))}
+                        </dl>
+
+                        {/* How it finds things, and where it looks — one
+                            line each. The first is the part worth knowing:
+                            retrieval fuses a full-text match with a vector
+                            one (see hybridSearchArticles), which is why a
+                            question phrased nothing like the headline still
+                            works. */}
+                        <div className="mt-3 space-y-2 border-t border-border pt-3 text-muted">
+                          <p>
+                            Each question is searched two ways at once — by wording
+                            and by meaning — so an article that never uses your
+                            words can still come back.
+                          </p>
+                          <p>
+                            Your archive first, the web only for the gaps. The answer
+                            says which is which.
+                          </p>
+                        </div>
+                      </div>
+                    </Tooltip.Content>
+                  </Tooltip.Root>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
           </div>
         </div>
       </div>
