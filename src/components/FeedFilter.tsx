@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Tabs, SearchField, Select, ListBox, ListBoxItem, Dropdown, Drawer, ToggleButtonGroup, ToggleButton, useOverlayState } from "@heroui/react";
+import { NEWS_FEEDS } from "@/lib/feed-sources";
 import { LIBRARY_FEED, type ArticleFilters, type FeedType } from "@/lib/types";
 import type { ViewMode } from "./ArticleGrid";
 
@@ -19,15 +20,17 @@ interface FeedFilterProps {
   options?: readonly FeedOption[];
 }
 
-/** The news feeds, in the order the tabs read. */
+/**
+ * The news feeds, in the order the tabs read, behind an "All" that no feed
+ * corresponds to.
+ *
+ * The feeds themselves come from `NEWS_FEEDS`, which the settings page also
+ * groups its sources under — one list, so a feed can never be named one thing
+ * here and another there.
+ */
 export const FEED_OPTIONS: readonly FeedOption[] = [
   { value: "all", label: "All" },
-  { value: "singapore", label: "Singapore" },
-  { value: "world", label: "World" },
-  { value: "asia", label: "Asia" },
-  { value: "finance", label: "Finance" },
-  { value: "ai", label: "AI" },
-  { value: "tech", label: "Tech" },
+  ...NEWS_FEEDS,
 ];
 
 /**

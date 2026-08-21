@@ -117,3 +117,22 @@ export const articles = pgTable(
     index("idx_articles_library").on(t.savedAt).where(sql`library`),
   ]
 );
+
+/**
+ * Which sources the reader has switched off, and nothing else.
+ *
+ * Deliberately sparse: a row exists only for a source someone has actually
+ * toggled, and `FEED_SOURCES` in `lib/feed-sources.ts` remains the list of what
+ * exists. Storing the full roster here instead would mean every new source
+ * needed a migration to seed it — and a source added to the code but missing
+ * from the table would silently never be fetched, which is the failure mode
+ * hardest to notice: the feed just quietly stops carrying one outlet.
+ *
+ * `enabled` is therefore an override, not the state. Absent means on.
+ */
+export const feedSources = pgTable("feed_sources", {
+  /** Matches `FeedSource.id` in the registry. */
+  id: text("id").primaryKey(),
+  enabled: boolean("enabled").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

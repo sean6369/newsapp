@@ -1,13 +1,6 @@
 import { format } from "date-fns";
 import { fetchDigestUrls, scrapeDigestPage, fetchCNAArticles, fetchSTArticles } from "./feeds";
-import {
-  CNA_WORLD_FEED_URL,
-  CNA_ASIA_FEED_URL,
-  CNA_FINANCE_FEED_URL,
-  ST_WORLD_FEED_URL,
-  ST_ASIA_FEED_URL,
-  ST_BUSINESS_FEED_URL,
-} from "./types";
+import { resolveFeedSources } from "./feed-sources";
 import { clipArticle } from "./clipper";
 import { buildArticle } from "./articles";
 import {
@@ -20,6 +13,7 @@ import {
   getArticlesForEmbeddingBySlugs,
   getRecentUnembeddedArticles,
   getRecentUnscoredArticles,
+  getFeedSourceOverrides,
 } from "./db/queries";
 import { scoreArticle, isScoringQuotaExhausted } from "./scorer";
 import { embedAndStore } from "./embeddings";
@@ -107,26 +101,50 @@ export async function runFetchPipeline(options?: {
   const targetDate = options?.date || format(new Date(), "yyyy-MM-dd");
   console.log(`[pipeline] Starting fetch for ${targetDate}`);
 
-  // 1. Fetch all sources in parallel (TLDR scrapes + CNA/ST RSS)
-  const digests = fetchDigestUrls(targetDate);
-  const [tldrResults, cnaSG, cnaWorld, cnaAsia, cnaFinance, stSG, stWorld, stAsia, stFinance] = await Promise.all([
-    Promise.all(digests.map((d) => scrapeDigestPage(d.url, d.feed, d.date))),
-    fetchCNAArticles(),
-    fetchCNAArticles(CNA_WORLD_FEED_URL, "world"),
-    fetchCNAArticles(CNA_ASIA_FEED_URL, "asia"),
-    fetchCNAArticles(CNA_FINANCE_FEED_URL, "finance"),
-    fetchSTArticles(),
-    fetchSTArticles(ST_WORLD_FEED_URL, "world"),
-    fetchSTArticles(ST_ASIA_FEED_URL, "asia"),
-    fetchSTArticles(ST_BUSINESS_FEED_URL, "finance"),
-  ]);
-  const allArticles: RawArticle[] = [
-    ...tldrResults.flat(),
-    ...cnaSG, ...cnaWorld, ...cnaAsia, ...cnaFinance,
-    ...stSG, ...stWorld, ...stAsia, ...stFinance,
-  ];
+  // 1. Fetch every source the reader has left switched on, in parallel
+  //    (TLDR scrapes + CNA/ST RSS).
+  //
+  // Which sources those are is read fresh on each run rather than captured at
+  // import: the settings page writes to the same table, and the hourly cron
+  // and a long-lived dev server would otherwise keep fetching from a roster
+  // the reader changed hours ago.
+  const sources = resolveFeedSources(await getFeedSourceOverrides());
+  const enabled = sources.filter((s) => s.enabled);
+
+  // Tasks and their labels are built together so the counts logged below can
+  // be attributed: with two parallel arrays, one disabled source would shift
+  // every label by one and quietly misreport which outlet returned what.
+  const tasks: { label: string; run: () => Promise<RawArticle[]> }[] = [];
+  for (const source of enabled) {
+    if (source.kind === "tldr") {
+      // A TLDR source is more than one fetch: each run re-checks yesterday's
+      // digest as well as today's (see `fetchDigestUrls`).
+      for (const digest of fetchDigestUrls(targetDate, [source.feed])) {
+        tasks.push({
+          label: `${source.id} ${digest.date}`,
+          run: () => scrapeDigestPage(digest.url, digest.feed, digest.date),
+        });
+      }
+    } else {
+      const fetchArticles = source.kind === "cna" ? fetchCNAArticles : fetchSTArticles;
+      tasks.push({
+        label: source.id,
+        run: () => fetchArticles(source.url, source.feed),
+      });
+    }
+  }
+
+  const fetched = await Promise.all(tasks.map((task) => task.run()));
+  const allArticles: RawArticle[] = fetched.flat();
+
+  // Deliberately not an early return when every source is off: the rest of
+  // this function is a no-op on an empty batch, and `finalize` still has the
+  // scoring and embedding repairs to run on articles fetched before the reader
+  // turned things off.
   console.log(
-    `[pipeline] TLDR: ${tldrResults.flat().length} | CNA: ${cnaSG.length} SG, ${cnaWorld.length} world, ${cnaAsia.length} asia, ${cnaFinance.length} finance | ST: ${stSG.length} SG, ${stWorld.length} world, ${stAsia.length} asia, ${stFinance.length} finance`
+    enabled.length === 0
+      ? `[pipeline] Every source is switched off (${sources.length} available) — nothing to fetch`
+      : `[pipeline] ${fetched.map((rows, i) => `${tasks[i].label}: ${rows.length}`).join(" | ")}`
   );
 
   // 2. Deduplicate within batch and against database

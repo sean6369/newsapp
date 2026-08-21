@@ -1,6 +1,6 @@
 import { eq, ne, gte, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL } from "drizzle-orm";
 import { db } from "./index";
-import { articles } from "./schema";
+import { articles, feedSources } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
 import { LIBRARY_FEED, type Article, type ArticleFilters, type FeedType, type SearchFilters, type SearchResponse, type SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
@@ -1192,4 +1192,43 @@ export async function getCorpusCoverage(): Promise<{
   const row = rows[0];
   if (!row?.earliest || !row.latest) return null;
   return { earliest: row.earliest, latest: row.latest, total: row.total };
+}
+
+// ── Feed sources ──────────────────────────────────────────────────────
+
+/**
+ * Every switch the reader has thrown, as `id → enabled`.
+ *
+ * Sparse by design (see `feedSources` in `schema.ts`), so the caller must treat
+ * a missing id as on rather than off — `resolveFeedSources` is the only place
+ * that decides that, and everything else should go through it.
+ */
+export async function getFeedSourceOverrides(): Promise<Map<string, boolean>> {
+  const rows = await db
+    .select({ id: feedSources.id, enabled: feedSources.enabled })
+    .from(feedSources);
+  return new Map(rows.map((r) => [r.id, r.enabled]));
+}
+
+/**
+ * Record the reader's switches, upserting one row per source.
+ *
+ * Rows are written for `true` as well as `false`. Deleting the row instead
+ * would give the same resolved answer today, but it also erases the fact that
+ * someone looked at this source and decided to keep it — and `updated_at` is
+ * the only record of when a source last changed hands.
+ */
+export async function setFeedSourceOverrides(
+  updates: Record<string, boolean>
+): Promise<void> {
+  const entries = Object.entries(updates);
+  if (entries.length === 0) return;
+
+  await db
+    .insert(feedSources)
+    .values(entries.map(([id, enabled]) => ({ id, enabled })))
+    .onConflictDoUpdate({
+      target: feedSources.id,
+      set: { enabled: sql`excluded.enabled`, updatedAt: sql`now()` },
+    });
 }

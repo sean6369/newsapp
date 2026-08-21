@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { FloatingDock } from "@/components/FloatingDock";
-import { Home, Library, Search, Sparkles } from "lucide-react";
+import { Home, Library, Search, Settings, Sparkles } from "lucide-react";
 
 const navItems = [
   {
@@ -24,6 +24,11 @@ const navItems = [
     title: "Ask",
     icon: <Sparkles className="h-full w-full text-foreground" />,
     href: "/ask",
+  },
+  {
+    title: "Settings",
+    icon: <Settings className="h-full w-full text-foreground" />,
+    href: "/settings",
   },
 ];
 

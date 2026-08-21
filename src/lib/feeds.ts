@@ -1,11 +1,7 @@
 import RSSParser from "rss-parser";
 import * as cheerio from "cheerio";
 import type { RawArticle, FeedType } from "./types";
-import {
-  FEED_URLS,
-  CNA_FEED_URL,
-  ST_FEED_URL,
-} from "./types";
+import type { NewsFeed } from "./feed-sources";
 import { extractSourceId } from "./articles";
 import { ARCHIVE_TZ } from "./dates";
 
@@ -17,7 +13,10 @@ interface DigestInfo {
   feed: FeedType;
 }
 
-export function fetchDigestUrls(targetDate: string): DigestInfo[] {
+export function fetchDigestUrls(
+  targetDate: string,
+  feeds: readonly NewsFeed[]
+): DigestInfo[] {
   // TLDR usually hasn't published "today's" digest yet when the hourly cron
   // runs early in the day (the dated URL 307s to the undated feed page until
   // then), so also re-check yesterday's date each run to self-heal once it
@@ -26,16 +25,16 @@ export function fetchDigestUrls(targetDate: string): DigestInfo[] {
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const yesterdayDate = yesterday.toISOString().split("T")[0];
 
-  return Object.keys(FEED_URLS).flatMap((feed) => [
+  return feeds.flatMap((feed) => [
     {
       url: `https://tldr.tech/${feed}/${targetDate}`,
       date: targetDate,
-      feed: feed as FeedType,
+      feed,
     },
     {
       url: `https://tldr.tech/${feed}/${yesterdayDate}`,
       date: yesterdayDate,
-      feed: feed as FeedType,
+      feed,
     },
   ]);
 }
@@ -229,8 +228,8 @@ async function fetchRSSArticles(options: RSSFeedOptions): Promise<RawArticle[]> 
 }
 
 export function fetchCNAArticles(
-  feedUrl: string = CNA_FEED_URL,
-  feed: FeedType = "singapore"
+  feedUrl: string,
+  feed: FeedType
 ): Promise<RawArticle[]> {
   const sectionFilters = CNA_SECTION_FILTERS[feed] || [];
   return fetchRSSArticles({
@@ -249,8 +248,8 @@ export function fetchCNAArticles(
 }
 
 export function fetchSTArticles(
-  feedUrl: string = ST_FEED_URL,
-  feed: FeedType = "singapore"
+  feedUrl: string,
+  feed: FeedType
 ): Promise<RawArticle[]> {
   return fetchRSSArticles({
     source: "ST",
