@@ -120,3 +120,160 @@ body {
   -webkit-text-fill-color: transparent;
   animation: shimmer 2s ease-in-out infinite;
 }
+
+/* -------------------------------------------------------------------------
+ * Masthead rabbits
+ *
+ * The parade in src/components/Masthead.tsx. Every moving part animates
+ * transform or opacity only, on delays and durations React measured once and
+ * wrote out as custom properties — so the whole run belongs to the compositor
+ * and the main thread is left free for the feed loading underneath it.
+ * ------------------------------------------------------------------------- */
+
+.mh-parade {
+  --mh-sprite: 18px;
+  /* Settles the letter onto the rabbit's back rather than leaving it hovering
+     over the ear tips. */
+  --mh-seat: -0.2em;
+}
+
+@media (min-width: 48rem) {
+  .mh-parade {
+    --mh-sprite: 22px;
+  }
+}
+
+/*
+ * One slot per character, holding its place in the line whatever the letter is
+ * doing. The padding is the gap between neighbouring rabbits: tracking would
+ * do the same job visually, but it hangs off one side of the glyph only, which
+ * would leave every rabbit standing half a space to the left of its letter.
+ */
+.mh-slot {
+  position: relative;
+  display: inline-block;
+  padding-inline: 0.13em;
+}
+
+.mh-ride,
+.mh-hop-in,
+.mh-hop-out {
+  display: inline-block;
+}
+
+/* The journey in: constant speed, so hops land evenly spaced on the ground. */
+.mh-ride {
+  animation: mh-ride var(--mh-in) linear var(--mh-delay) both;
+}
+
+@keyframes mh-ride {
+  from {
+    transform: translateX(var(--mh-from));
+  }
+  to {
+    transform: none;
+  }
+}
+
+/*
+ * One arc per hop. Every rabbit travels at the same speed, so the beat is not
+ * shared: a hop lasts however long that rabbit's trip divides into. Rising
+ * eases out and falling eases in, which is the difference between a hop and a
+ * sine wave.
+ */
+@keyframes mh-hop {
+  0% {
+    transform: none;
+    animation-timing-function: cubic-bezier(0.3, 0, 0.4, 1);
+  }
+  50% {
+    transform: translateY(calc(-1 * var(--mh-rise)));
+    animation-timing-function: cubic-bezier(0.6, 0, 0.7, 1);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+.mh-hop-in {
+  animation: mh-hop var(--mh-hop-in) var(--mh-delay) var(--mh-hops-in) both;
+}
+
+.mh-hop-out {
+  animation: mh-hop var(--mh-hop-out) var(--mh-out-delay) var(--mh-hops-out) both;
+}
+
+/*
+ * The rabbit carries its letter on its back and travels with it, because it is
+ * inside the letter's own transform. Its exit is the one thing it does alone.
+ */
+.mh-rabbit {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-top: var(--mh-seat);
+  margin-left: calc(var(--mh-sprite) / -2);
+  animation:
+    mh-leave var(--mh-out) linear var(--mh-out-delay) both,
+    mh-fade var(--mh-out) linear var(--mh-out-delay) both;
+}
+
+@keyframes mh-leave {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(var(--mh-to));
+  }
+}
+
+@keyframes mh-fade {
+  0%,
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.mh-sprite {
+  display: block;
+  width: var(--mh-sprite);
+  height: auto;
+  /* Pixel art: no smoothing between the cells. */
+  shape-rendering: crispEdges;
+}
+
+/*
+ * The sprite sheet is two frames wide and the viewBox one frame wide, so a
+ * shift of one frame swaps stretched-mid-leap for tucked-and-landed. Two steps
+ * per hop, on the same beat as the hop itself. The second animation is the
+ * exit cycle; it has no backwards fill, so it stays out of the way until its
+ * delay has run and the first has finished holding the landed frame.
+ */
+.mh-frames {
+  animation:
+    mh-frames-in var(--mh-hop-in) steps(2, jump-none) var(--mh-delay) var(--mh-hops-in) both,
+    mh-frames-out var(--mh-hop-out) steps(2, jump-none) var(--mh-out-delay) var(--mh-hops-out) forwards;
+}
+
+/* Deliberately two names for one movement: an element can carry both cycles at
+   once, but only if they are separate @keyframes rules. */
+@keyframes mh-frames-in {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(calc(-1 * var(--mh-frame)));
+  }
+}
+
+@keyframes mh-frames-out {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(calc(-1 * var(--mh-frame)));
+  }
+}
