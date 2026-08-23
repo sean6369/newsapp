@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useSearchParams } from "next/navigation";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "@heroui/react";
-import { filtersFromParams, filtersToParams, buildSwrKey } from "@/lib/feed-query";
+import { filtersToParams, buildSwrKey } from "@/lib/feed-query";
 import type { ArticleWithRelated, ArticleFilters } from "@/lib/types";
 
 interface ArticlesData {
@@ -53,14 +52,13 @@ const fetcher = async (url: string): Promise<ArticlesData> => {
   };
 };
 
-export function useArticles(): UseArticlesReturn {
-  const searchParams = useSearchParams();
+export function useArticles(initialFilters: ArticleFilters): UseArticlesReturn {
   // `date: undefined` is not "no opinion", it is the canonical spelling of
   // "the newest day" — the same thing /api/articles resolves a dateless
   // request to. Keeping it that way through the whole session is what lets a
   // cold load settle on one SWR key and stay there: the page seeds that key
   // from the server, the hook mounts on it, and nothing re-keys behind it.
-  const [filters, setFiltersState] = useState<ArticleFilters>(() => filtersFromParams(searchParams));
+  const [filters, setFiltersState] = useState<ArticleFilters>(initialFilters);
   const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
   const filtersRef = useRef(filters);
   filtersRef.current = filters; // eslint-disable-line react-hooks/refs -- keep ref in sync with latest state for use in callbacks

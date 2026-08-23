@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { SWRConfig } from "swr";
 import { Feed } from "@/components/Feed";
@@ -8,7 +7,7 @@ import { buildSwrKey, filtersFromParams } from "@/lib/feed-query";
 
 type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
 
-async function FeedWithView({ searchParams }: { searchParams: SearchParams }) {
+export default async function FeedPage({ searchParams }: { searchParams: SearchParams }) {
   const [cookieStore, params] = await Promise.all([cookies(), searchParams]);
   const initialView = parseViewCookie(cookieStore.get(FEED_VIEW_COOKIE)?.value, "grid");
 
@@ -25,7 +24,7 @@ async function FeedWithView({ searchParams }: { searchParams: SearchParams }) {
   // deliberately and expects to wait for. Let the client fetch those; the cold
   // load of the feed itself is what this is for.
   if (filters.search) {
-    return <Feed initialView={initialView} />;
+    return <Feed initialView={initialView} initialFilters={filters} />;
   }
 
   const payload = await getFeedPayload(filters);
@@ -47,17 +46,18 @@ async function FeedWithView({ searchParams }: { searchParams: SearchParams }) {
   // reader is already reading.
   const fallback: Record<string, FeedPayload> = { [buildSwrKey(filters)]: payload };
 
+  // Everything this page needs is awaited above, in the page itself, and the
+  // feed is handed the filters rather than reading the URL for them. That is
+  // what keeps this render in one piece: a Suspense boundary here — which is
+  // what wrapping useSearchParams used to require — would have React flush the
+  // shell first and stream the feed in behind it, and a boundary with no
+  // fallback shows nothing while it waits. The page painted blank and then
+  // swapped a few hundred kilobytes of articles in at the end, which is a flash
+  // that grows with the number of articles. Nothing suspends now, so the
+  // browser is handed one settled document, in order, top to bottom.
   return (
     <SWRConfig value={{ fallback }}>
-      <Feed initialView={initialView} />
+      <Feed initialView={initialView} initialFilters={filters} />
     </SWRConfig>
-  );
-}
-
-export default function FeedPage({ searchParams }: { searchParams: SearchParams }) {
-  return (
-    <Suspense>
-      <FeedWithView searchParams={searchParams} />
-    </Suspense>
   );
 }

@@ -8,14 +8,15 @@ import { ArticleGrid, type ViewMode } from "@/components/ArticleGrid";
 import { FEED_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
 import { Masthead } from "@/components/Masthead";
 import { ARCHIVE_TZ } from "@/lib/dates";
+import type { ArticleFilters } from "@/lib/types";
 
 // Module-level flag: only run /api/fetch on the first mount per page load.
 // Back-navigation remounts the component but this stays true, skipping the fetch.
 // A full page reload re-evaluates the module, resetting it to false.
 let hasFetchedOnce = false;
 
-export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
-  const { articles, dates, loading, fetching, error, filters, setFilters, refetch, lastFetchTime, rescoringArticles, rescoreArticle, lastRescoredSlug, deleteArticle } = useArticles();
+export function Feed({ initialView = "grid", initialFilters }: { initialView?: ViewMode; initialFilters: ArticleFilters }) {
+  const { articles, dates, loading, fetching, error, filters, setFilters, refetch, lastFetchTime, rescoringArticles, rescoreArticle, lastRescoredSlug, deleteArticle } = useArticles(initialFilters);
   const [view, setView] = useState<ViewMode>(initialView);
   const skipEntranceRef = useRef(hasFetchedOnce);
 
