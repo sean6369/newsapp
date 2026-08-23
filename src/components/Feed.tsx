@@ -7,6 +7,7 @@ import { DateNav } from "@/components/DateNav";
 import { ArticleGrid, type ViewMode } from "@/components/ArticleGrid";
 import { FEED_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
 import { Masthead } from "@/components/Masthead";
+import { ARCHIVE_TZ } from "@/lib/dates";
 
 // Module-level flag: only run /api/fetch on the first mount per page load.
 // Back-navigation remounts the component but this stays true, skipping the fetch.
@@ -110,7 +111,8 @@ export function Feed({ initialView = "grid" }: { initialView?: ViewMode }) {
 
       {lastFetchTime && (
         <p className="text-right text-xs text-muted mt-6">
-          Last fetched: {new Date(lastFetchTime).toLocaleString()}
+          Last fetched:{" "}
+          {new Date(lastFetchTime).toLocaleString("en-US", { timeZone: ARCHIVE_TZ })}
         </p>
       )}
     </div>

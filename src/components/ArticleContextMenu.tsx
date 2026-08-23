@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { Modal } from "@heroui/react/modal";
 import { shareViaTelegram } from "@/lib/telegram";
+
+/** Never fires; the store's value differs only between server and client. */
+const subscribeNoop = () => () => {};
 
 interface ArticleContextMenuProps {
   slug: string;
@@ -29,6 +32,12 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
   const titleRef = useRef(title);
   const setActiveSlug = useCallback((s: string) => { slugRef.current = s; }, []);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: string } | null>(null);
+  // The feed server-renders its cards, and this portal targets document.body,
+  // which does not exist there. Nothing is in the portal until a right-click
+  // opens the menu, so waiting for hydration costs no visible markup — and it
+  // has to be the portal we withhold rather than its contents, because
+  // AnimatePresence needs to stay mounted to play the menu's exit animation.
+  const hydrated = useSyncExternalStore(subscribeNoop, () => true, () => false);
   const [shareOpen, setShareOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [modalInfo, setModalInfo] = useState({ slug, sourceUrl, sourceDomain, title });
@@ -133,7 +142,7 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
     <div className="relative" onContextMenu={handleContextMenu}>
       {/* eslint-disable-next-line react-hooks/refs -- setActiveSlug is a callback passed as a prop, not a ref read */}
       {children(menuTrigger, setActiveSlug)}
-      {createPortal(
+      {hydrated && createPortal(
         <AnimatePresence>
           {menu && (
             <motion.div

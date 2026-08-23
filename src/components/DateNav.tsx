@@ -6,6 +6,7 @@ import { Calendar } from "@heroui/react/calendar";
 import { Popover } from "@heroui/react/popover";
 import { parseDate } from "@internationalized/date";
 import type { CalendarDate } from "@internationalized/date";
+import { archiveToday, archiveDaysAgo } from "@/lib/dates";
 
 interface DateNavProps {
   dates: string[];
@@ -13,20 +14,15 @@ interface DateNavProps {
   onDateChange: (date: string) => void;
 }
 
-function toLocalDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 function formatLabel(dateStr: string): string {
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-
-  const todayStr = toLocalDateStr(today);
-  const yesterdayStr = toLocalDateStr(yesterday);
-
-  if (dateStr === todayStr) return "Today";
-  if (dateStr === yesterdayStr) return "Yesterday";
+  // These labels are compared against `articles.date`, which is a Singapore
+  // day. Asking the runtime for "today" instead would answer in whatever zone
+  // it happens to run in — UTC on the server, the reader's zone in the browser
+  // — and the two disagree for the eight hours after Singapore midnight, which
+  // is long enough for the server to render "Yesterday" under a heading the
+  // client then rewrites to "Today".
+  if (dateStr === archiveToday()) return "Today";
+  if (dateStr === archiveDaysAgo(1)) return "Yesterday";
 
   const date = new Date(dateStr + "T00:00:00");
   const weekday = date.toLocaleDateString("en-US", { weekday: "short" });
@@ -44,10 +40,8 @@ export function DateNav({ dates, currentDate, onDateChange }: DateNavProps) {
   const displayDate = currentDate ?? dates[0];
 
   const datesSet = new Set(dates);
-  const todayStr = toLocalDateStr(new Date());
-  const yesterdayDate = new Date();
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  const yesterdayStr = toLocalDateStr(yesterdayDate);
+  const todayStr = archiveToday();
+  const yesterdayStr = archiveDaysAgo(1);
 
   function goBack() {
     if (hasPrev) onDateChange(dates[currentIndex + 1]);

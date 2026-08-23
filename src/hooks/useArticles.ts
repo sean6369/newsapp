@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "@heroui/react";
+import { filtersFromParams, filtersToParams, buildSwrKey } from "@/lib/feed-query";
 import type { ArticleWithRelated, ArticleFilters } from "@/lib/types";
 
 interface ArticlesData {
@@ -28,15 +29,6 @@ interface UseArticlesReturn {
   deleteArticle: (slug: string) => Promise<void>;
 }
 
-function filtersFromParams(params: URLSearchParams): ArticleFilters {
-  return {
-    feed: (params.get("feed") as ArticleFilters["feed"]) || "all",
-    date: params.get("date") || undefined,
-    search: params.get("search") || undefined,
-    sort: (params.get("sort") as ArticleFilters["sort"]) || "relevance",
-  };
-}
-
 function sortArticles(list: ArticleWithRelated[], sort?: string): ArticleWithRelated[] {
   return [...list].sort((a, b) => {
     if (sort === "relevance") {
@@ -49,26 +41,6 @@ function sortArticles(list: ArticleWithRelated[], sort?: string): ArticleWithRel
     return b.createdAt.localeCompare(a.createdAt);
   });
 }
-
-function filtersToParams(filters: ArticleFilters, omitDefaults = true): string {
-  const params = new URLSearchParams();
-  if (filters.feed && filters.feed !== "all") params.set("feed", filters.feed);
-  if (filters.date) params.set("date", filters.date);
-  if (filters.search) params.set("search", filters.search);
-  if (filters.sort && (!omitDefaults || filters.sort !== "relevance")) params.set("sort", filters.sort);
-  return params.toString();
-}
-
-function buildSwrKey(filters: ArticleFilters): string {
-  return `/api/articles?${filtersToParams(filters, false)}`;
-}
-
-// Module-level: survives remounts (like hasFetchedOnce in Feed).
-// On back-navigation the URL is "/" (no date param) but we know the
-// latest date from the previous mount, so we seed filters immediately
-// and the SWR key matches the cached entry — single-phase render.
-// A full page reload re-evaluates the module, resetting to undefined.
-let lastKnownLatestDate: string | undefined;
 
 const fetcher = async (url: string): Promise<ArticlesData> => {
   const response = await fetch(url);
@@ -83,18 +55,17 @@ const fetcher = async (url: string): Promise<ArticlesData> => {
 
 export function useArticles(): UseArticlesReturn {
   const searchParams = useSearchParams();
-  const [filters, setFiltersState] = useState<ArticleFilters>(() => {
-    const f = filtersFromParams(searchParams);
-    if (!f.date && lastKnownLatestDate) {
-      f.date = lastKnownLatestDate;
-    }
-    return f;
-  });
+  // `date: undefined` is not "no opinion", it is the canonical spelling of
+  // "the newest day" — the same thing /api/articles resolves a dateless
+  // request to. Keeping it that way through the whole session is what lets a
+  // cold load settle on one SWR key and stay there: the page seeds that key
+  // from the server, the hook mounts on it, and nothing re-keys behind it.
+  const [filters, setFiltersState] = useState<ArticleFilters>(() => filtersFromParams(searchParams));
   const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
-  const initializedRef = useRef(!!searchParams.get("date") || !!lastKnownLatestDate);
   const filtersRef = useRef(filters);
   filtersRef.current = filters; // eslint-disable-line react-hooks/refs -- keep ref in sync with latest state for use in callbacks
   const latestDateRef = useRef<string | undefined>(undefined);
+  const { cache, fallback: seededPayloads } = useSWRConfig();
 
   // Debounce search value for SWR key
   useEffect(() => {
@@ -131,17 +102,12 @@ export function useArticles(): UseArticlesReturn {
     }
   );
 
-  // On first load with no date param, default to the most recent date
+  // Only records which day "newest" currently resolves to. It deliberately
+  // does not write that date into filters: doing so is what used to move the
+  // SWR key off the one the server had just seeded, costing a second request
+  // for bytes the page was already holding.
   useEffect(() => {
-    if (data?.dates?.length) {
-      latestDateRef.current = data.dates[0];
-      lastKnownLatestDate = data.dates[0];
-    }
-    if (!initializedRef.current && !filtersRef.current.date && data?.dates?.length) {
-      initializedRef.current = true;
-      const latestDate = data.dates[0];
-      setFiltersState((prev) => ({ ...prev, date: latestDate }));
-    }
+    if (data?.dates?.length) latestDateRef.current = data.dates[0];
   }, [data]);
 
   const setFilters = useCallback(
@@ -150,6 +116,10 @@ export function useArticles(): UseArticlesReturn {
         const next = { ...prev, ...partial };
 
         queueMicrotask(() => {
+          // The newest day stays out of the URL, so a reload lands back on the
+          // dateless key the page seeds. Only the address is trimmed — `next`
+          // keeps the date, so naming the newest day explicitly still re-fetches
+          // it, which is what you want for the one day still being written to.
           const urlFilters = { ...next };
           if (urlFilters.date === latestDateRef.current) {
             delete urlFilters.date;
@@ -267,9 +237,38 @@ export function useArticles(): UseArticlesReturn {
       });
   }, [mutate]);
 
+  // The server hands this page its first screen through SWR's `fallback` map,
+  // which is consulted beside the cache rather than written into it. Two of
+  // SWR's behaviours read the cache directly and so cannot see it:
+  // `keepPreviousData` hands back the key you just left instead of the seeded
+  // one, and nothing revalidates afterwards, because seeded data still counts
+  // as data. Returning to the seeded key — toggling sort and back — would show
+  // the wrong day's articles for good. Copying the seed into the cache once it
+  // has been read makes it an ordinary entry and both behaviours line up again.
+  useEffect(() => {
+    const seeded = seededPayloads?.[swrKey];
+    if (seeded && cache.get(swrKey)?.data === undefined) {
+      // Only ever the seed for this exact key. Writing whatever `data` happens
+      // to hold would copy the day being left into the day being opened, since
+      // keepPreviousData means `data` still reads as the previous key's during
+      // the render the key changes on.
+      mutate(seeded, { revalidate: false });
+    }
+  }, [swrKey, seededPayloads, cache, mutate]);
+
   const refetch = useCallback(() => {
     mutate();
   }, [mutate]);
+
+  // What the reader is shown they are looking at. The key leaves the newest
+  // day unnamed on purpose; the date navigator has to print something, and
+  // only the response knows which day "newest" came back as. Everything that
+  // writes back does so with a partial, so this display value never becomes
+  // the key.
+  const displayFilters = useMemo(
+    () => ({ ...filters, date: filters.date ?? data?.dates?.[0] }),
+    [filters, data]
+  );
 
   return {
     articles: data?.articles ?? [],
@@ -277,7 +276,7 @@ export function useArticles(): UseArticlesReturn {
     loading: !data,
     fetching: isLoading && !!data,
     error: swrError ? (swrError instanceof Error ? swrError.message : "Unknown error") : null,
-    filters,
+    filters: displayFilters,
     setFilters,
     refetch,
     lastFetchTime: data?.lastFetchTime ?? null,
