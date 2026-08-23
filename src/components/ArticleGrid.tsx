@@ -34,11 +34,20 @@ interface ArticleGridProps {
 
 export function ArticleGrid({ articles, loading, fetching, view = "grid", sort, rescoringArticles, onRescore, onDelete, lastRescoredSlug, skipEntranceRef }: ArticleGridProps) {
   const genRef = useRef(0);
-  const prevKeysRef = useRef<Set<string>>(new Set());
+  const prevKeysRef = useRef<Set<string> | null>(null);
   const skipGenRef = useRef(false);
   const currentKeys = new Set(articles.map((a) => a.slug));
-  const keysChanged = currentKeys.size !== prevKeysRef.current.size ||
-    [...currentKeys].some((s) => !prevKeysRef.current.has(s));
+  // Rows present on the very first render were never "replaced" — they came
+  // down with the document and are already on screen. Counting that render as
+  // a change would start them at the entrance animation's opacity 0, so the
+  // server would emit the top of the feed invisible and leave it blank until
+  // motion had hydrated: exactly what server-rendering it was meant to avoid.
+  // A first render that is genuinely empty still records its empty set, so the
+  // rows arriving after it animate in as before.
+  const prevKeys = prevKeysRef.current;
+  const keysChanged =
+    prevKeys !== null &&
+    (currentKeys.size !== prevKeys.size || [...currentKeys].some((s) => !prevKeys.has(s)));
 
   let enableLayout = true;
   let skipEntrance = false;
