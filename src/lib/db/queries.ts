@@ -1,8 +1,8 @@
 import { eq, ne, gte, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL } from "drizzle-orm";
 import { db } from "./index";
-import { articles, feedSources } from "./schema";
+import { articles, conversations, feedSources } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
-import { LIBRARY_FEED, type Article, type ArticleFilters, type FeedType, type SearchFilters, type SearchResponse, type SearchResultArticle } from "../types";
+import { LIBRARY_FEED, type Article, type ArticleFilters, type ChatMessage, type Conversation, type ConversationSummary, type FeedType, type SearchFilters, type SearchResponse, type SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
 
 /**
@@ -1231,4 +1231,133 @@ export async function setFeedSourceOverrides(
       target: feedSources.id,
       set: { enabled: sql`excluded.enabled`, updatedAt: sql`now()` },
     });
+}
+
+/**
+ * Every past Ask conversation, newest exchange first.
+ *
+ * Unpaginated, and meant to stay that way for a while: this is one reader's
+ * own chats, the rows carry no thread, and the index on `updated_at` already
+ * returns them in display order. The cap is a backstop against a drawer that
+ * would otherwise render unboundedly, not a page size — nothing here reports a
+ * total or offers a next page, because at a few chats a day it would be years
+ * before either meant anything.
+ */
+export async function listConversations(limit = 200): Promise<ConversationSummary[]> {
+  const rows = await db
+    .select({
+      id: conversations.id,
+      title: conversations.title,
+      updatedAt: conversations.updatedAt,
+    })
+    .from(conversations)
+    .orderBy(desc(conversations.updatedAt))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    updatedAt: r.updatedAt.toISOString(),
+  }));
+}
+
+/** One conversation with its thread, or null if it has been deleted. */
+export async function getConversation(id: string): Promise<Conversation | null> {
+  const [row] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, id))
+    .limit(1);
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    title: row.title,
+    updatedAt: row.updatedAt.toISOString(),
+    messages: row.messages,
+  };
+}
+
+/** Just the title, for deciding whether a save needs to name a new chat. */
+export async function getConversationTitle(id: string): Promise<string | null> {
+  const [row] = await db
+    .select({ title: conversations.title })
+    .from(conversations)
+    .where(eq(conversations.id, id))
+    .limit(1);
+
+  return row?.title ?? null;
+}
+
+/**
+ * Store a conversation, creating it on first save and replacing the thread on
+ * every one after.
+ *
+ * The whole document is rewritten rather than appended to, because the client
+ * holds the thread and the server has no opinion about it — an answer that
+ * streamed, was cut off, and was asked again should leave one conversation
+ * looking like what the reader can see, not an accumulation of attempts.
+ *
+ * `title` is deliberately absent from the update. It is written once, when the
+ * row is created, and after that the only thing that can rename a chat is a
+ * migration — see `conversations.title` in `schema.ts` for why a re-summarised
+ * title would be worse than a stale one.
+ */
+export async function saveConversation(params: {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+}): Promise<ConversationSummary> {
+  const [row] = await db
+    .insert(conversations)
+    .values({
+      id: params.id,
+      title: params.title,
+      messages: params.messages,
+    })
+    .onConflictDoUpdate({
+      target: conversations.id,
+      set: {
+        messages: sql`excluded.messages`,
+        /**
+         * Bumped only when the thread actually changed.
+         *
+         * `updated_at` is the drawer's sort order, so touching it is a claim
+         * that something happened. Re-saving an identical thread is not an
+         * idle case: the page re-sends what it restored from sessionStorage on
+         * every load, precisely so a conversation whose first save was
+         * interrupted still reaches the table. Without this guard that rescue
+         * would come at the price of lifting a chat to the top of the list for
+         * having been *read*.
+         *
+         * `IS DISTINCT FROM` over `<>` because either side can be null, and on
+         * `jsonb` it compares parsed values — so a thread that re-serialised
+         * with its keys in a different order still counts as unchanged.
+         *
+         * Written as a CASE rather than a `setWhere` on the whole update, which
+         * was the other way to say this: a skipped DO UPDATE returns no row at
+         * all, and `.returning()` would then hand back nothing for the caller
+         * to report.
+         */
+        updatedAt: sql`CASE WHEN ${conversations.messages} IS DISTINCT FROM excluded.messages THEN now() ELSE ${conversations.updatedAt} END`,
+      },
+    })
+    .returning({
+      id: conversations.id,
+      title: conversations.title,
+      updatedAt: conversations.updatedAt,
+    });
+
+  return { id: row.id, title: row.title, updatedAt: row.updatedAt.toISOString() };
+}
+
+/** Returns false when the row was already gone, so the route can 404. */
+export async function deleteConversation(id: string): Promise<boolean> {
+  const deleted = await db
+    .delete(conversations)
+    .where(eq(conversations.id, id))
+    .returning({ id: conversations.id });
+
+  return deleted.length > 0;
 }

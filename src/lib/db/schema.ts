@@ -6,12 +6,14 @@ import {
   real,
   boolean,
   timestamp,
+  jsonb,
   index,
   uniqueIndex,
   customType,
   vector,
 } from "drizzle-orm/pg-core";
 import { EMBEDDING_DIMENSIONS } from "../gemini";
+import type { ChatMessage } from "../types";
 
 /**
  * Postgres `tsvector`. Only ever written by the database (generated column), so
@@ -136,3 +138,45 @@ export const feedSources = pgTable("feed_sources", {
   enabled: boolean("enabled").notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/**
+ * One Ask conversation, whole.
+ *
+ * The thread is stored as a single `jsonb` document rather than a row per
+ * message, because nothing ever queries *into* a conversation: the list needs
+ * the title and when it last moved, and opening one needs all of it. A
+ * messages table would buy per-message addressing this app has no use for, at
+ * the cost of a join and an ordering column on every read.
+ *
+ * What that document holds is `ChatMessage[]` exactly as the client renders
+ * it — retrieval steps and article cards included. Storing only the prose
+ * would mean a reopened chat lost its working and its sources, which is most
+ * of what distinguishes an Ask answer from a chat log. It also means the shape
+ * is the client's: `sanitiseMessages` in `lib/conversations` is what stands
+ * between a POST body and this column.
+ *
+ * `/api/ask` stays stateless. It is still handed the full thread on every
+ * question and still stores nothing itself — this table is written by the
+ * page after an answer completes, so history is a record of conversations
+ * rather than a thing the model participates in.
+ */
+export const conversations = pgTable(
+  "conversations",
+  {
+    /** A UUID minted by the browser when the first answer lands. */
+    id: text("id").primaryKey(),
+    /**
+     * The label the drawer lists it under, written once from the opening
+     * exchange and never revised — see `generateConversationTitle`. A title
+     * that re-summarised as the chat grew would rename rows the reader had
+     * already learned to find.
+     */
+    title: text("title").notNull(),
+    messages: jsonb("messages").$type<ChatMessage[]>().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    /** Last exchange, which is the order the drawer lists them in. */
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  // The list is every row in `updated_at` order, so the index is the list.
+  (t) => [index("idx_conversations_updated_at").on(t.updatedAt)]
+);

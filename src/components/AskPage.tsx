@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Tooltip } from "@heroui/react";
-import { Search, FileText, Info } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion, type Transition } from "motion/react";
+import { Disclosure, Tooltip } from "@heroui/react";
+import { Search, FileText, Info, SquarePen } from "lucide-react";
 import { useChat } from "@/hooks/useChat";
+import { newConversationId, useConversations } from "@/hooks/useConversations";
+import { fallbackTitle } from "@/lib/conversation-title";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
+import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import { AskArticleGroups } from "./AskArticleGroups";
 import {
   HERO_OFFSET,
@@ -15,7 +18,11 @@ import {
   heroEaseCurve,
   contentColumn,
 } from "./hero-shared";
-import type { AskStep, ChatMessage as ChatMessageType } from "@/lib/types";
+import type {
+  AskStep,
+  ChatMessage as ChatMessageType,
+  Conversation,
+} from "@/lib/types";
 
 /**
  * How much of the viewport the conversation claims once it starts.
@@ -45,16 +52,79 @@ const THREAD_MIN_HEIGHT = "calc(100svh - 14rem)";
 const SEQ_MESSAGE_DELAY = 0.24;
 
 /**
- * Where an in-progress conversation is kept.
+ * How the greeting and the hint come and go around the composer's travel.
  *
- * A destination page sets a different expectation from the article panel:
- * people navigate away, come back, and expect the thread still there. Session
- * storage covers exactly that — a refresh or a trip to an article and back —
- * without introducing a conversations table for something that has not yet
- * been asked for. The endpoint stays stateless, so real history could be
- * added later without reshaping anything.
+ * Height and opacity deliberately no longer share a duration. Fading across
+ * the full 400ms left the greeting legible for most of the composer's slide,
+ * which reads as two things moving at once where the page is trying to show
+ * one: the text was still there, half-erased, while the thing it sat above had
+ * already left. So on the way out the text goes first and the space closes
+ * behind it — the fade is done inside the opening 40% of the collapse.
+ *
+ * Coming back is the same statement reversed. The space opens on the same
+ * curve, and the greeting arrives late, once there is somewhere for it to be,
+ * rather than appearing in a slot that is still expanding around it. Both
+ * keep `heroEaseCurve` on the height, which is what holds them to the
+ * composer's own CSS transition.
+ *
+ * The easing matters more than the duration here, which a first attempt at
+ * this got backwards. `easeIn` holds near full opacity and drops at the end,
+ * so a 160ms fade still read as the greeting hanging about — most of that
+ * time was spent barely changing. `easeOut` spends the opacity immediately,
+ * which is what makes a short fade feel short. Both directions use it, so the
+ * text leaves as decisively as it arrives.
+ */
+const HERO_ASIDE_EXIT: Transition = {
+  height: { duration: 0.4, ease: heroEaseCurve },
+  opacity: { duration: 0.09, ease: "easeOut" },
+};
+
+// `delay + duration` lands the text exactly as the space finishes opening.
+// Keep that sum at the height's 0.4 if either number is retuned.
+const HERO_ASIDE_ENTER: Transition = {
+  height: { duration: 0.4, ease: heroEaseCurve },
+  opacity: { duration: 0.12, delay: 0.28, ease: "easeOut" },
+};
+
+/** Reduced motion keeps the same two states and skips the travel between. */
+const HERO_ASIDE_INSTANT: Transition = { duration: 0 };
+
+/**
+ * Where the thread currently on screen is kept.
+ *
+ * Not the history — that is the `conversations` table, read through
+ * `useConversations`. This is the cache in front of it, covering the one case
+ * the database is a clumsy answer to: a refresh, or a trip to an article and
+ * back, where the reader expects the same thread still there and instantly.
+ * Restoring from the server instead would mean a spinner on a page that
+ * currently renders its conversation in the first frame.
+ *
+ * It holds the conversation's id alongside the messages so a restored thread
+ * keeps saving into the row it came from rather than forking a second copy on
+ * every refresh.
+ *
+ * `/api/ask` remains stateless: it is handed the whole thread with each
+ * question and stores nothing.
  */
 const STORAGE_KEY = "ask:conversation";
+
+/** The thread on screen, as sessionStorage holds it between page loads. */
+interface StoredThread {
+  /** The row in `conversations` this is; null until its first answer is saved. */
+  id: string | null;
+  messages: ChatMessageType[];
+}
+
+const EMPTY_THREAD: StoredThread = { id: null, messages: [] };
+
+/**
+ * The header's icon buttons.
+ *
+ * Captioned for screen readers only: there is room beside the title for two
+ * icons but not for two labels.
+ */
+const ICON_BUTTON =
+  "inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-border/50 hover:text-foreground";
 
 // The three levers a reader actually has over what gets retrieved: how much
 // time, which feed, how deep. Each row changes how you would word a question.
@@ -76,15 +146,48 @@ const askTips: Array<{ example: string; meaning: string }> = [
   { example: "What exactly did they say about the layoffs?", meaning: "Opens the article and reads it whole, where a summary will not do" },
 ];
 
-function loadStored(): ChatMessageType[] {
-  if (typeof window === "undefined") return [];
+function loadStored(): StoredThread {
+  if (typeof window === "undefined") return EMPTY_THREAD;
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    return Array.isArray(parsed) ? parsed : [];
+
+    // The key held a bare array before conversations were kept server-side. A
+    // tab open across the deploy still has one, and it is a real thread the
+    // reader can see — read it, and let the next answer give it an id.
+    if (Array.isArray(parsed)) return { id: null, messages: parsed };
+
+    if (parsed && Array.isArray(parsed.messages)) {
+      return {
+        id: typeof parsed.id === "string" ? parsed.id : null,
+        messages: parsed.messages,
+      };
+    }
+
+    return EMPTY_THREAD;
   } catch {
-    return [];
+    return EMPTY_THREAD;
   }
+}
+
+/**
+ * A thread reduced to what decides whether it is worth saving again.
+ *
+ * The save effect runs on every settled render, and most of those are nothing
+ * new: the reader opened the history drawer, the conversation was just given
+ * its id, a stored thread was reopened from the drawer. Comparing signatures
+ * keeps those from becoming writes.
+ *
+ * It is no longer the only thing standing between a redundant save and a
+ * reordered drawer — `saveConversation` will not move a conversation whose
+ * thread has not changed — but it still spares the round trip.
+ *
+ * The last message's length rather than its content: while an answer streams
+ * it is the only thing changing, and it only ever grows.
+ */
+function threadSignature(id: string | null, messages: ChatMessageType[]): string {
+  const last = messages[messages.length - 1];
+  return `${id}:${messages.length}:${last ? last.content.length : 0}`;
 }
 
 /**
@@ -239,6 +342,106 @@ function accentGreeting(line: string) {
   );
 }
 
+/**
+ * What a reply's retrieval amounted to, in one line.
+ *
+ * Counted by kind rather than totalled, because the two are different work and
+ * the reader can tell: a search is the model casting about, and opening an
+ * article is it deciding a summary would not do. "3 steps" would hide that
+ * distinction behind the only number the two have in common.
+ */
+function describeSteps(steps: AskStep[]): string {
+  const searches = steps.filter((step) => step.tool === "search_articles").length;
+  const reads = steps.length - searches;
+
+  const parts: string[] = [];
+  if (searches > 0) parts.push(`${searches} search${searches === 1 ? "" : "es"}`);
+  if (reads > 0) parts.push(`${reads} article${reads === 1 ? "" : "s"} read`);
+
+  return parts.join(", ");
+}
+
+/**
+ * A fold for the parts of a reply that are not the reply.
+ *
+ * The searches behind an answer and the articles under it are both evidence
+ * rather than prose, and a thread of several exchanges is mostly evidence by
+ * volume. Folding them puts the answers back within one screen of each other
+ * without throwing the working away — it is still a click, not a rebuild.
+ */
+function CollapsibleAside({
+  summary,
+  children,
+  isExpanded,
+  defaultExpanded,
+  onExpandedChange,
+}: {
+  summary: string;
+  children: ReactNode;
+  isExpanded?: boolean;
+  defaultExpanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+}) {
+  return (
+    <Disclosure.Root
+      isExpanded={isExpanded}
+      defaultExpanded={defaultExpanded}
+      onExpandedChange={onExpandedChange}
+    >
+      {/* No `Disclosure.Heading` around the trigger, which is the component's
+          usual shape. It renders an `<h3>`, and the APG only asks for a
+          heading where the disclosure is a section of the page — these are
+          folds inside a message. Wrapping them would put "2 searches" and "5
+          articles" into the document outline, so a screen reader navigating
+          this page by heading would wade through the working of every reply
+          to reach the next one. */}
+      <Disclosure.Trigger className="inline-flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-foreground">
+        {summary}
+        {/* `ml-0` undoes the component's own `ml-auto`, which is there to push
+            the chevron to the far edge of a full-width row. This trigger is
+            only as wide as its label, so the chevron belongs beside the
+            words. */}
+        <Disclosure.Indicator className="ml-0 h-3.5 w-3.5" />
+      </Disclosure.Trigger>
+      <Disclosure.Content>
+        {/* Cancelling three sides of the body's own `p-2`. Left inset would
+            step the chips and the article grid in from the answer they belong
+            to, which is the one thing folding these was not meant to change;
+            the top 8px is kept, as the gap under the trigger. */}
+        <Disclosure.Body className="-mx-2 -mb-2">{children}</Disclosure.Body>
+      </Disclosure.Content>
+    </Disclosure.Root>
+  );
+}
+
+/**
+ * The retrieval behind one reply: open while it happens, folded once it is
+ * over.
+ *
+ * Expansion follows `live` until the reader touches it, and their choice wins
+ * from then on. That is what lets the steps be both — the only thing to watch
+ * during the seconds before any text arrives, and a single line the moment the
+ * answer makes them redundant — while still folding on the disclosure's own
+ * height transition rather than vanishing.
+ */
+function StepsSection({ steps, live }: { steps: AskStep[]; live: boolean }) {
+  const [choice, setChoice] = useState<boolean | null>(null);
+
+  return (
+    <CollapsibleAside
+      summary={describeSteps(steps)}
+      isExpanded={choice ?? live}
+      onExpandedChange={setChoice}
+    >
+      <div className="space-y-1">
+        {steps.map((step, i) => (
+          <StepChip key={i} step={step} />
+        ))}
+      </div>
+    </CollapsibleAside>
+  );
+}
+
 function StepChip({ step }: { step: AskStep }) {
   const Icon = step.tool === "search_articles" ? Search : FileText;
   return (
@@ -261,16 +464,95 @@ function StepChip({ step }: { step: AskStep }) {
  * restore-in-effect, and neither is worth it for a page with no server data.
  */
 export function AskPage() {
-  const [initialMessages] = useState<ChatMessageType[]>(loadStored);
+  const [stored] = useState<StoredThread>(loadStored);
   // A restored conversation arrives whole, so its cards should arrive with it
   // rather than staggering in as though they had just been retrieved — the
   // same reason the thread itself mounts with `initial={false}` below.
-  const [restoredIds] = useState(() => new Set(initialMessages.map((m) => m.id)));
+  //
+  // Stateful rather than computed once, because a thread can now also arrive
+  // from the history drawer, and one opened an hour after the page loaded is
+  // no less restored than the one it loaded with.
+  const [restoredIds, setRestoredIds] = useState(
+    () => new Set(stored.messages.map((m) => m.id))
+  );
   const reduceMotion = useReducedMotion();
-  const { messages, sendMessage, isStreaming, isSearching, error, clearMessages } = useChat({
+  // No list here — the drawer fetches that when it opens. This mount is only
+  // for `save`, which shares the drawer's SWR cache and so refreshes it.
+  const { save } = useConversations();
+
+  /**
+   * Conversations still being answered somewhere other than on screen.
+   *
+   * The reader asked, walked off to read something else, and the reply is
+   * still arriving. Each is kept with the title it would be listed under so
+   * the drawer can show it working — a chat that is merely absent for a minute
+   * looks lost, and this is the difference between backgrounding a reply and
+   * discarding one.
+   */
+  const [background, setBackground] = useState<Array<{ id: string; title: string }>>([]);
+
+  /**
+   * The half of a finished background reply that needs the view.
+   *
+   * Held in a ref and filled in below rather than written inline, because the
+   * inline version reached forward into `replaceMessages` and `isStreaming` —
+   * values destructured from the very `useChat` call the handler is an
+   * argument to. That works at runtime, since the handler only runs later, but
+   * it is a cycle on the page, and the React Compiler answers a cycle by
+   * giving up on the whole component. The hook solves the same problem the
+   * same way for this very callback.
+   */
+  const landBackgroundReply = useRef<(thread: ChatMessageType[], id: string) => void>(() => {});
+
+  const {
+    messages,
+    sendMessage,
+    isStreaming,
+    isSearching,
+    error,
+    clearMessages,
+    replaceMessages,
+  } = useChat({
     endpoint: "/api/ask",
-    initialMessages,
+    initialMessages: stored.messages,
+    // The reply outlived the thread it was written into, so it is stored
+    // straight from here rather than through the save effect below — that one
+    // watches what is on screen, and this is by definition not.
+    onBackgroundFinish: (thread, id) => {
+      // A null thread is a reply that failed with nothing to show for it. The
+      // row still has to stop saying it is being answered, or the conversation
+      // would sit in the drawer marked busy until a reload.
+      if (thread) {
+        save(id, thread);
+        landBackgroundReply.current(thread, id);
+      }
+      setBackground((current) => current.filter((c) => c.id !== id));
+    },
   });
+
+  /**
+   * Which conversation is on screen. Null on a bare page, and set the moment a
+   * question is asked — before the row it names exists, which is deliberate;
+   * see `handleSend`.
+   */
+  const [activeId, setActiveId] = useState<string | null>(stored.id);
+  /**
+   * The thread as the server last confirmed it, so settled renders that change
+   * nothing do not become writes.
+   *
+   * Deliberately *not* seeded from what was restored. A thread comes back from
+   * sessionStorage whether or not its first save ever completed — the title
+   * call takes a couple of seconds, and a reload inside that window leaves a
+   * conversation the reader can still see and the table has never heard of.
+   * Starting empty means every restored thread attempts one save on mount,
+   * which rescues exactly that case.
+   *
+   * What makes that affordable is the server: re-saving an unchanged thread
+   * leaves `updated_at` alone (see `saveConversation`), so the rescue cannot
+   * reorder the drawer. The cost is one cheap request per load — the title is
+   * only generated when the row is genuinely new.
+   */
+  const savedSignature = useRef("");
 
   const [tipsOpen, setTipsOpen] = useState(false);
   const [greetings] = useState(() => greetingsFor(new Date().getHours()));
@@ -278,27 +560,195 @@ export function AskPage() {
 
   const endRef = useRef<HTMLDivElement>(null);
 
+  //
+  // Held back while a reply is arriving. The token queue rewrites the last
+  // message on every animation frame, and this effect follows `messages`, so
+  // without the guard a settled thread — retrieval steps, article cards and
+  // all — was being serialised and written to storage sixty times a second
+  // for the length of every answer.
+  //
+  // Nothing is lost by waiting: `isStreaming` drops the moment the reply is
+  // whole, which runs this with the finished thread. A reload mid-answer
+  // restores the conversation as it stood before the question, which is the
+  // honest thing to keep — the reply it was missing did not survive the reload
+  // either.
   useEffect(() => {
+    if (isStreaming) return;
+
     try {
       if (messages.length === 0) sessionStorage.removeItem(STORAGE_KEY);
-      else sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      else sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ id: activeId, messages }));
     } catch {
       // A full or unavailable quota costs persistence, not the conversation.
     }
-  }, [messages]);
+  }, [messages, activeId, isStreaming]);
 
-  // Keyed on the message *count*, not the messages themselves. Streaming
-  // rewrites the last message on every animation frame, so depending on the
-  // array would restart a smooth scroll ~60 times a second, each one fighting
-  // the last and taking the page out from under anyone trying to read up. One
-  // scroll per new exchange is the whole intent.
-  const messageCount = messages.length;
+  /**
+   * Keep the finished conversation.
+   *
+   * After the answer, not during it: a thread saved mid-stream would store a
+   * half-written reply, and every frame of the token queue would be another
+   * write. Waiting also means the conversation is named from something worth
+   * naming — the title is generated on the request that creates the row.
+   *
+   * Nothing is awaited and nothing is shown. The answer is already on screen,
+   * so a save that fails costs the reader their history, not their reply, and
+   * `useConversations` reports it to the console rather than over the page.
+   */
+  useEffect(() => {
+    if (isStreaming || !activeId || messages.length === 0) return;
+
+    const last = messages[messages.length - 1];
+    // An empty assistant message is a reply that never arrived — a request that
+    // failed, or one abandoned by switching threads. There is nothing to keep.
+    if (last.role !== "assistant" || last.content === "") return;
+
+    const signature = threadSignature(activeId, messages);
+    if (savedSignature.current === signature) return;
+    savedSignature.current = signature;
+
+    save(activeId, messages);
+  }, [isStreaming, messages, activeId, save]);
+
+  /**
+   * Show a finished background reply to a reader who came back for it.
+   *
+   * They opened this conversation while it was still being written, so what is
+   * on screen is the thread as it was last saved. Rather than leave that
+   * quietly out of date, the completed thread replaces it.
+   *
+   * Skipped while anything is streaming: they may have asked a fresh question
+   * here in the meantime, and a thread assembled before that question existed
+   * would erase the reply they are currently watching.
+   *
+   * Assigned on every render, so the values it closes over are the current
+   * ones rather than whichever were in scope when the reply began.
+   */
+  useEffect(() => {
+    landBackgroundReply.current = (thread, id) => {
+      if (id !== activeId || isStreaming) return;
+
+      replaceMessages(thread);
+      // Its cards arrive with it rather than staggering in, like any other
+      // thread that was not watched being written.
+      setRestoredIds((current) => new Set([...current, ...thread.map((m) => m.id)]));
+      // Recorded as stored, because it is: this thread came back from the save
+      // that preceded it, so the save effect has nothing left to write.
+      savedSignature.current = threadSignature(id, thread);
+    };
+  });
+
+  // Keyed on the last message's *identity*, not on the array. Streaming
+  // rewrites that message on every animation frame, so depending on the array
+  // would restart a smooth scroll ~60 times a second, each one fighting the
+  // last and taking the page out from under anyone trying to read up.
+  //
+  // The id rather than the count, which was the earlier version of this: a
+  // conversation opened from the history drawer replaces the thread outright,
+  // and one that happened to hold as many messages as the one it replaced
+  // would have left the reader at the old scroll position in a new chat.
+  const lastMessageId = messages[messages.length - 1]?.id;
   useEffect(() => {
     endRef.current?.scrollIntoView({
       behavior: reduceMotion ? "auto" : "smooth",
       block: "end",
     });
-  }, [messageCount, reduceMotion]);
+  }, [lastMessageId, reduceMotion]);
+
+  /**
+   * Ask, giving the conversation an identity if it does not have one yet.
+   *
+   * The id is minted here rather than by the save that first needs it, so it
+   * exists before anything can want it — the save effect above simply has an
+   * `activeId` or does not, and nothing has to reconcile a thread that
+   * acquired one halfway through. Nothing is written yet: an id with no
+   * answer behind it never reaches the server, so a question whose reply
+   * fails leaves no empty chat in the drawer.
+   */
+  const handleSend = useCallback(
+    (text: string) => {
+      const id = activeId ?? newConversationId();
+      if (!activeId) setActiveId(id);
+      // The id rides with the reply. If the reader walks away before it lands,
+      // this is what tells `onBackgroundFinish` which conversation it belongs
+      // to — reading `activeId` at that point would name whichever chat they
+      // had moved on to.
+      sendMessage(text, id);
+    },
+    [activeId, sendMessage]
+  );
+
+  /**
+   * Leave the conversation on screen, keeping any reply still arriving.
+   *
+   * The hook is asked whether it actually detached something rather than being
+   * told: `isStreaming` here is a snapshot from the last render, and a reply
+   * that finished while the drawer was fetching the chat being opened would
+   * have this recording a background reply that does not exist — a row stuck
+   * on "Answering…" for the rest of the session, unopenable because it is
+   * marked busy and undeletable for the same reason.
+   *
+   * The title and id are read from the outgoing render, which is safe where
+   * `isStreaming` is not: neither changes while a reply is in flight, since
+   * the conversation is named by its first question and given its id when that
+   * question is sent.
+   */
+  const leaveFor = useCallback(
+    (next: ChatMessageType[]) => {
+      const leaving = activeId;
+      const title = fallbackTitle(messages);
+
+      if (replaceMessages(next) && leaving) {
+        setBackground((current) =>
+          current.some((c) => c.id === leaving) ? current : [...current, { id: leaving, title }]
+        );
+      }
+    },
+    [replaceMessages, activeId, messages]
+  );
+
+  /**
+   * Start over. Only the page is reset — the conversation being left stays in
+   * the drawer, which is the whole difference this makes to the button: it
+   * used to be the one thing that could destroy a thread.
+   */
+  const startNewChat = useCallback(() => {
+    // `leaveFor([])`, not `clearMessages()`: leaving a conversation is not the
+    // same as binning it, and a reply already being written is worth having in
+    // history whether or not the reader stayed for it.
+    leaveFor([]);
+    setActiveId(null);
+    setRestoredIds(new Set());
+    savedSignature.current = threadSignature(null, []);
+  }, [leaveFor]);
+
+  /**
+   * The conversation on screen was deleted from the drawer.
+   *
+   * Discards the reply outright rather than backgrounding it — the one place
+   * that distinction is load-bearing rather than merely tidy.
+   */
+  const handleActiveDeleted = useCallback(() => {
+    // `clearMessages()` here, which aborts. Backgrounding the reply would save
+    // it, and saving it would restore — seconds later, with nothing to explain
+    // it — the row the reader just deleted.
+    clearMessages();
+    setActiveId(null);
+    setRestoredIds(new Set());
+    savedSignature.current = threadSignature(null, []);
+  }, [clearMessages]);
+
+  const openConversation = useCallback(
+    (conversation: Conversation) => {
+      leaveFor(conversation.messages);
+      setActiveId(conversation.id);
+      setRestoredIds(new Set(conversation.messages.map((m) => m.id)));
+      // Recorded as already saved, so merely reading a chat does not rewrite it
+      // and lift it to the top of the drawer.
+      savedSignature.current = threadSignature(conversation.id, conversation.messages);
+    },
+    [leaveFor]
+  );
 
   const empty = messages.length === 0;
 
@@ -331,14 +781,46 @@ export function AskPage() {
               Ask anything about your news.
             </p>
           </div>
-          {!empty && (
-            <button
-              onClick={clearMessages}
-              className="shrink-0 text-sm text-muted transition-colors hover:text-foreground"
-            >
-              New chat
-            </button>
-          )}
+
+          {/* Top right, at the same weight as the description opposite —
+              neither is what you came to this page to press. */}
+          <div className="flex shrink-0 items-center gap-1">
+            <ChatHistoryDrawer
+              triggerClassName={ICON_BUTTON}
+              activeId={activeId}
+              /* The chat on screen, plus any still being answered elsewhere.
+                 Named by the same truncation the server falls back to, so a row
+                 does not visibly re-wrap when the written title replaces it. */
+              pending={[
+                ...(activeId && messages.length > 0
+                  ? [
+                      {
+                        id: activeId,
+                        title: fallbackTitle(messages),
+                        label: isStreaming ? "Answering…" : "Saving…",
+                      },
+                    ]
+                  : []),
+                /* Filtered against the row above it. The two can now name the
+                   same conversation — the reader can be sitting in a chat that
+                   is still being answered — and two entries sharing an id
+                   would be two React keys sharing one. */
+                ...background
+                  .filter((c) => c.id !== activeId)
+                  .map((c) => ({ id: c.id, title: c.title, label: "Answering…" })),
+              ]}
+              busyIds={background.map((c) => c.id)}
+              onSelect={openConversation}
+              onActiveDeleted={handleActiveDeleted}
+            />
+            {/* Still only offered when there is a conversation to leave. */}
+            {!empty && (
+              <button onClick={startNewChat} className={ICON_BUTTON}>
+                <SquarePen className="h-[18px] w-[18px]" aria-hidden />
+                <span className="sr-only">New chat</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -410,13 +892,10 @@ export function AskPage() {
                     {/* The steps do run live, unlike the cards below. They are
                         the answer being worked on rather than part of it, and
                         they are all there is to see during the seconds before
-                        any text arrives. */}
+                        any text arrives — which is why they open themselves
+                        and then fold away once there is an answer instead. */}
                     {message.steps && message.steps.length > 0 && (
-                      <div className="space-y-1">
-                        {message.steps.map((step, i) => (
-                          <StepChip key={i} step={step} />
-                        ))}
-                      </div>
+                      <StepsSection steps={message.steps} live={stillArriving} />
                     )}
 
                     <ChatMessage message={message} />
@@ -428,11 +907,22 @@ export function AskPage() {
                         twice. */}
                     {!stillArriving && message.articles && message.articles.length > 0 && (
                       <div className="pt-1">
-                        <AskArticleGroups
-                          articles={message.articles}
-                          content={message.content}
-                          entrance={!restoredIds.has(message.id)}
-                        />
+                        {/* Open by default, unlike the steps above. These are
+                            what the answer rests on rather than how it was
+                            found, and a reply whose evidence is hidden until
+                            asked for is a different page from this one. */}
+                        <CollapsibleAside
+                          summary={`${message.articles.length} article${
+                            message.articles.length === 1 ? "" : "s"
+                          }`}
+                          defaultExpanded
+                        >
+                          <AskArticleGroups
+                            articles={message.articles}
+                            content={message.content}
+                            entrance={!restoredIds.has(message.id)}
+                          />
+                        </CollapsibleAside>
                       </div>
                     )}
                   </div>
@@ -460,48 +950,70 @@ export function AskPage() {
           <div className="sticky bottom-0 bg-background/45 pt-2 pb-24 backdrop-blur-sm md:pb-28">
             {/* The greeting rides above the composer rather than sitting in
                 the gap above it, so it travels *with* the input on the way
-                down instead of being left behind by it — and leaves on the
-                same curve, collapsing its height rather than just fading, so
-                the composer's slide stays one movement.
+                down instead of being left behind by it — and both arrives and
+                leaves on the same curve, collapsing its height rather than
+                just fading, so the composer's travel stays one movement in
+                either direction.
 
                 Serif and unhurried: it is the only thing on the page that is
                 not an instrument. */}
-            <AnimatePresence>
+            {/* `initial={false}` belongs here rather than on the child.
+                On the child it means "never animate in", which is why New
+                chat used to snap the greeting into place at full height while
+                the composer was still travelling. Here it means only "do not
+                animate the greeting that is present when the page first
+                opens" — which was the whole intent — and every later arrival
+                animates like the departure does. */}
+            <AnimatePresence initial={false}>
               {empty && (
                 <motion.div
-                  initial={false}
-                  exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                  transition={
-                    reduceMotion ? { duration: 0 } : { duration: 0.4, ease: heroEaseCurve }
-                  }
-                  className="mb-10 overflow-hidden text-center md:mb-12"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{
+                    opacity: 1,
+                    height: "auto",
+                    transition: reduceMotion ? HERO_ASIDE_INSTANT : HERO_ASIDE_ENTER,
+                  }}
+                  exit={{
+                    opacity: 0,
+                    height: 0,
+                    transition: reduceMotion ? HERO_ASIDE_INSTANT : HERO_ASIDE_EXIT,
+                  }}
+                  className="overflow-hidden"
                 >
-                  {/* A fixed slot for the line to swap inside. `mode="wait"`
-                      unmounts the old greeting before the new one mounts, so
-                      without a floor here the container would collapse to
-                      nothing between the two and kick the composer up the
-                      page every ten seconds. Matched to the line height at
-                      each breakpoint. */}
-                  <div className="flex min-h-8 items-center justify-center md:min-h-9">
-                    <AnimatePresence mode="wait" initial={false}>
-                      <motion.p
-                        key={greetings[greetingIndex]}
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        transition={{ duration: reduceMotion ? 0 : 0.3, ease: "easeOut" }}
-                        className="font-serif text-2xl font-medium md:text-3xl"
-                      >
-                        {accentGreeting(greetings[greetingIndex])}
-                      </motion.p>
-                    </AnimatePresence>
+                  {/* The gap below the greeting moved in here off the animated
+                      element. Animating `marginBottom` alongside height meant
+                      naming a pixel value, which would have thrown away the
+                      responsive `md:` step; inside an `overflow-hidden` box
+                      the margin counts toward the height being animated
+                      anyway, so collapsing the height takes it with it. */}
+                  <div className="mb-10 text-center md:mb-12">
+                    {/* A fixed slot for the line to swap inside. `mode="wait"`
+                        unmounts the old greeting before the new one mounts, so
+                        without a floor here the container would collapse to
+                        nothing between the two and kick the composer up the
+                        page every ten seconds. Matched to the line height at
+                        each breakpoint. */}
+                    <div className="flex min-h-8 items-center justify-center md:min-h-9">
+                      <AnimatePresence mode="wait" initial={false}>
+                        <motion.p
+                          key={greetings[greetingIndex]}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: reduceMotion ? 0 : 0.3, ease: "easeOut" }}
+                          className="font-serif text-2xl font-medium md:text-3xl"
+                        >
+                          {accentGreeting(greetings[greetingIndex])}
+                        </motion.p>
+                      </AnimatePresence>
+                    </div>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
 
             <ChatInput
-              onSend={sendMessage}
+              onSend={handleSend}
               disabled={isStreaming}
               placeholder="Ask about your news..."
             />
@@ -514,68 +1026,80 @@ export function AskPage() {
                 Controlled rather than left to react-aria's hover/focus alone
                 — a tooltip that only opens on hover is unreachable on a
                 phone, and the click handler is what gives touch a way in. */}
-            <AnimatePresence>
+            {/* Same arrangement as the greeting above: the presence guard
+                skips only the first page load, the margin sits inside the
+                animated box, and the hint expands and fades on the composer's
+                own curve rather than appearing fully formed beneath it. */}
+            <AnimatePresence initial={false}>
               {empty && (
                 <motion.div
-                  initial={false}
-                  exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                  transition={
-                    reduceMotion ? { duration: 0 } : { duration: 0.4, ease: heroEaseCurve }
-                  }
-                  className="mt-8 flex justify-center overflow-hidden md:mt-10"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{
+                    opacity: 1,
+                    height: "auto",
+                    transition: reduceMotion ? HERO_ASIDE_INSTANT : HERO_ASIDE_ENTER,
+                  }}
+                  exit={{
+                    opacity: 0,
+                    height: 0,
+                    transition: reduceMotion ? HERO_ASIDE_INSTANT : HERO_ASIDE_EXIT,
+                  }}
+                  className="overflow-hidden"
                 >
-                  <Tooltip.Root
-                    isOpen={tipsOpen}
-                    onOpenChange={setTipsOpen}
-                    delay={150}
-                    closeDelay={150}
-                  >
-                    <Tooltip.Trigger
-                      aria-label="How Ask works"
-                      onClick={() => setTipsOpen((open) => !open)}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-accent/40 hover:text-foreground"
+                  <div className="mt-8 flex justify-center md:mt-10">
+                    <Tooltip.Root
+                      isOpen={tipsOpen}
+                      onOpenChange={setTipsOpen}
+                      delay={150}
+                      closeDelay={150}
                     >
-                      <Info className="h-3.5 w-3.5" aria-hidden />
-                      How Ask works
-                    </Tooltip.Trigger>
-                    <Tooltip.Content placement="bottom" offset={10} showArrow>
-                      <Tooltip.Arrow />
-                      {/* `.tooltip` sets `break-all`, which would split the
-                          example questions mid-word; it inherits, so the
-                          override goes here. */}
-                      <div className="w-[19rem] max-w-full break-normal p-1 text-left">
-                        <dl className="space-y-2">
-                          {askTips.map((tip) => (
-                            <div key={tip.example}>
-                              {/* Questions, so they read as speech rather than
-                                  as syntax to be typed exactly — which is what
-                                  Search's boxed code examples are. */}
-                              <dt className="text-foreground">&ldquo;{tip.example}&rdquo;</dt>
-                              <dd className="mt-1 text-muted">{tip.meaning}</dd>
-                            </div>
-                          ))}
-                        </dl>
+                      <Tooltip.Trigger
+                        aria-label="How Ask works"
+                        onClick={() => setTipsOpen((open) => !open)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-accent/40 hover:text-foreground"
+                      >
+                        <Info className="h-3.5 w-3.5" aria-hidden />
+                        How Ask works
+                      </Tooltip.Trigger>
+                      <Tooltip.Content placement="bottom" offset={10} showArrow>
+                        <Tooltip.Arrow />
+                        {/* `.tooltip` sets `break-all`, which would split the
+                            example questions mid-word; it inherits, so the
+                            override goes here. */}
+                        <div className="w-[19rem] max-w-full break-normal p-1 text-left">
+                          <dl className="space-y-2">
+                            {askTips.map((tip) => (
+                              <div key={tip.example}>
+                                {/* Questions, so they read as speech rather than
+                                    as syntax to be typed exactly — which is what
+                                    Search's boxed code examples are. */}
+                                <dt className="text-foreground">&ldquo;{tip.example}&rdquo;</dt>
+                                <dd className="mt-1 text-muted">{tip.meaning}</dd>
+                              </div>
+                            ))}
+                          </dl>
 
-                        {/* How it finds things, and where it looks — one
-                            line each. The first is the part worth knowing:
-                            retrieval fuses a full-text match with a vector
-                            one (see hybridSearchArticles), which is why a
-                            question phrased nothing like the headline still
-                            works. */}
-                        <div className="mt-3 space-y-2 border-t border-border pt-3 text-muted">
-                          <p>
-                            Each question is searched two ways at once — by wording
-                            and by meaning — so an article that never uses your
-                            words can still come back.
-                          </p>
-                          <p>
-                            Your archive first, the web only for the gaps. The answer
-                            says which is which.
-                          </p>
+                          {/* How it finds things, and where it looks — one
+                              line each. The first is the part worth knowing:
+                              retrieval fuses a full-text match with a vector
+                              one (see hybridSearchArticles), which is why a
+                              question phrased nothing like the headline still
+                              works. */}
+                          <div className="mt-3 space-y-2 border-t border-border pt-3 text-muted">
+                            <p>
+                              Each question is searched two ways at once — by wording
+                              and by meaning — so an article that never uses your
+                              words can still come back.
+                            </p>
+                            <p>
+                              Prioritises your archive, the web only for the gaps. The
+                              answer says which is which.
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    </Tooltip.Content>
-                  </Tooltip.Root>
+                      </Tooltip.Content>
+                    </Tooltip.Root>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

@@ -82,6 +82,26 @@ export interface ChatMessage {
 }
 
 /**
+ * One past conversation as the history drawer lists it.
+ *
+ * Deliberately without `messages`. The drawer shows every chat the reader has
+ * ever had, and sending each one's full thread — retrieval steps, article
+ * cards and all — to render a list of titles would make opening the drawer the
+ * most expensive request in the app. The thread arrives only when one is
+ * opened, via `Conversation`.
+ */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  /** When the last exchange landed, ISO-8601. Also the list's sort order. */
+  updatedAt: string;
+}
+
+export interface Conversation extends ConversationSummary {
+  messages: ChatMessage[];
+}
+
+/**
  * An article returned by retrieval, as far as the client is concerned.
  *
  * Defined here rather than in `lib/retrieval` so the client can name the shape
