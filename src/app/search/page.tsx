@@ -1,8 +1,10 @@
 import { cookies } from "next/headers";
 import { searchArticles, getArticleDates } from "@/lib/db/queries";
 import { SearchPage } from "@/components/SearchPage";
+import { ReadMarksProvider } from "@/components/ReadMarks";
 import { SEARCH_PAGE_SIZE, DEFAULT_SEARCH_SORT } from "@/lib/types";
 import { SEARCH_VIEW_COOKIE, parseViewCookie } from "@/lib/view-cookie";
+import { getReadMarksEnabled } from "@/lib/read-marks-server";
 
 export const metadata = {
   title: "Search - Leedon News",
@@ -16,23 +18,26 @@ export default async function SearchRoute({
   const { q } = await searchParams;
   const query = (Array.isArray(q) ? q[0] : q) ?? "";
 
-  const [initial, dates, cookieStore] = await Promise.all([
+  const [initial, dates, cookieStore, readMarks] = await Promise.all([
     searchArticles({ query, limit: SEARCH_PAGE_SIZE, sort: DEFAULT_SEARCH_SORT }),
     // Includes the library's dates: they bound the calendar, and the Library
     // scope is searchable from this page.
     getArticleDates({ includeLibrary: true }),
     cookies(),
+    getReadMarksEnabled(),
   ]);
 
   return (
-    <SearchPage
-      initialQuery={query}
-      initialView={parseViewCookie(cookieStore.get(SEARCH_VIEW_COOKIE)?.value, "list")}
-      initialResults={initial.results}
-      initialTotal={initial.total}
-      initialRowCount={initial.rowCount}
-      initialMode={initial.mode}
-      availableDates={dates}
-    />
+    <ReadMarksProvider enabled={readMarks}>
+      <SearchPage
+        initialQuery={query}
+        initialView={parseViewCookie(cookieStore.get(SEARCH_VIEW_COOKIE)?.value, "list")}
+        initialResults={initial.results}
+        initialTotal={initial.total}
+        initialRowCount={initial.rowCount}
+        initialMode={initial.mode}
+        availableDates={dates}
+      />
+    </ReadMarksProvider>
   );
 }

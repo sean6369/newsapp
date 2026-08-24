@@ -85,6 +85,8 @@ export function buildArticle(
     createdAt: new Date().toISOString(),
     sourceId: rawArticle.sourceId,
     updatedAt: null,
+    // Just ingested; nobody has opened it.
+    read: false,
   };
 
   return { article, content };

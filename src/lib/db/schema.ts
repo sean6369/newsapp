@@ -180,3 +180,51 @@ export const conversations = pgTable(
   // The list is every row in `updated_at` order, so the index is the list.
   (t) => [index("idx_conversations_updated_at").on(t.updatedAt)]
 );
+
+/**
+ * Articles the reader has opened.
+ *
+ * A row means read; no row means unread. There is no boolean column, because
+ * the only two states are "in the table" and "not", and a `read` flag would
+ * invite a third — a row saying false, which nothing would ever write and
+ * every reader would have to remember to filter out.
+ *
+ * The slug is a foreign key with `on delete cascade`, so deleting an article
+ * takes its mark with it. That is the whole of the housekeeping: an earlier
+ * client-side version kept marks in `localStorage`, where a deleted article's
+ * slug lingered forever and the set had to be capped to stop it growing
+ * without bound.
+ *
+ * No `user_id`, in keeping with every other table here — `conversations` and
+ * `feed_sources` are the same reader's data stored the same way. Accounts,
+ * when they arrive, are one migration that adds the column to all three.
+ */
+export const readMarks = pgTable("read_marks", {
+  slug: text("slug")
+    .primaryKey()
+    .references(() => articles.slug, { onDelete: "cascade" }),
+  /**
+   * Kept for the record, not for querying — nothing sorts or filters on it,
+   * so it carries no index. Every read of this table is either "is this one
+   * slug marked" (the primary key) or "all of them", and an index on a column
+   * no query mentions is a write cost paid on every article opened.
+   */
+  readAt: timestamp("read_at").defaultNow().notNull(),
+});
+
+/**
+ * Reader preferences that are not about a specific feed source.
+ *
+ * Key/value rather than a column per setting: these are the app's own switches
+ * rather than anything queried across, and a table that grows a column per
+ * checkbox needs a migration for every one of them.
+ *
+ * Sparse, like `feed_sources` — a missing key means the default, and the
+ * module that owns the setting is the only place that says what the default
+ * is.
+ */
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

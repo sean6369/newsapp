@@ -218,6 +218,8 @@ export async function buildLibraryClip(
     createdAt: new Date().toISOString(),
     sourceId,
     updatedAt: null,
+    // Just clipped; nobody has opened it.
+    read: false,
   };
 
   const content = clipped?.content ?? `[Read the original article](${url})`;

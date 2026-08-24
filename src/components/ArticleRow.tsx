@@ -6,12 +6,14 @@ import { motion, AnimatePresence } from "motion/react";
 import type { Article, ArticleWithRelated } from "@/lib/types";
 import { feedColor, scoreColor, slideVariants } from "./article-shared";
 import { useSourceSwitcher } from "@/hooks/useSourceSwitcher";
+import { useReadMarks, useReadState } from "./ReadMarks";
 
 interface ArticleRowProps {
   article: ArticleWithRelated;
   rescoringArticles?: Set<string>;
   menuTrigger?: React.ReactNode;
-  onActiveSlugChange?: (slug: string) => void;
+  /** Reports the source currently showing, and whether it counts as read. */
+  onActiveChange?: (active: { slug: string; read: boolean }) => void;
   /**
    * Override how the title renders. Receives the currently shown source, so a
    * grouped row keeps the right title when swiped. Used by search to mark
@@ -20,20 +22,34 @@ interface ArticleRowProps {
   renderTitle?: (article: Article) => React.ReactNode;
 }
 
-export function ArticleRow({ article, rescoringArticles, menuTrigger, onActiveSlugChange, renderTitle }: ArticleRowProps) {
+export function ArticleRow({ article, rescoringArticles, menuTrigger, onActiveChange, renderTitle }: ArticleRowProps) {
   const { active, hasSwitcher, sourceIndex, direction, sources, prev, next, swipeHandlers } = useSourceSwitcher(article);
   const rescoring = rescoringArticles?.has(active.slug) ?? false;
+  const { markRead } = useReadMarks();
+  const read = useReadState(active.slug, active.read);
 
   useEffect(() => {
-    onActiveSlugChange?.(active.slug);
-  }, [active.slug, onActiveSlugChange]);
+    onActiveChange?.({ slug: active.slug, read });
+  }, [active.slug, read, onActiveChange]);
+
+  /** See `ArticleCard` — the swipe that ended in this click gets first refusal. */
+  const handleClick = (e: React.MouseEvent) => {
+    swipeHandlers.onClick(e);
+    if (!e.defaultPrevented && !read) markRead(active.slug);
+  };
 
   return (
     <Link
       href={`/article/${active.slug}`}
-      className="relative flex flex-col bg-background border-2 border-border rounded-lg px-5 py-3.5 hover:border-accent/40 transition-colors group overflow-hidden"
+      data-read-mark={read ? "" : undefined}
+      className="article-tile relative flex flex-col bg-background border-2 border-border rounded-lg px-5 py-3.5 hover:border-accent/40 group overflow-hidden"
       {...swipeHandlers}
+      onClick={handleClick}
     >
+      {/* The dim and the dot say "read" to the eye and to nothing else.
+          Announced before the headline so it qualifies the link a reader is
+          about to decide on, rather than arriving after they have heard it. */}
+      {read && <span className="sr-only">Read. </span>}
       <AnimatePresence mode="wait" custom={direction.current} initial={false}>
         <motion.div
           key={active.slug}

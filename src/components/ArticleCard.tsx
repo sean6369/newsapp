@@ -6,30 +6,53 @@ import { motion, AnimatePresence } from "motion/react";
 import type { Article, ArticleWithRelated } from "@/lib/types";
 import { feedColor, scoreColor, slideVariants } from "./article-shared";
 import { useSourceSwitcher } from "@/hooks/useSourceSwitcher";
+import { useReadMarks, useReadState } from "./ReadMarks";
 
 interface ArticleCardProps {
   article: ArticleWithRelated;
   rescoringArticles?: Set<string>;
   menuTrigger?: React.ReactNode;
-  onActiveSlugChange?: (slug: string) => void;
+  /** Reports the source currently showing, and whether it counts as read. */
+  onActiveChange?: (active: { slug: string; read: boolean }) => void;
   /** See ArticleRow — overrides title rendering so search can mark matches. */
   renderTitle?: (article: Article) => React.ReactNode;
 }
 
-export function ArticleCard({ article, rescoringArticles, menuTrigger, onActiveSlugChange, renderTitle }: ArticleCardProps) {
+export function ArticleCard({ article, rescoringArticles, menuTrigger, onActiveChange, renderTitle }: ArticleCardProps) {
   const { active, hasSwitcher, sourceIndex, direction, sources, prev, next, swipeHandlers } = useSourceSwitcher(article);
   const rescoring = rescoringArticles?.has(active.slug) ?? false;
+  const { markRead } = useReadMarks();
+  const read = useReadState(active.slug, active.read);
 
   useEffect(() => {
-    onActiveSlugChange?.(active.slug);
-  }, [active.slug, onActiveSlugChange]);
+    onActiveChange?.({ slug: active.slug, read });
+  }, [active.slug, read, onActiveChange]);
+
+  // The switcher's own click handler is the one that swallows the click that
+  // ended a swipe, so it has to run first and have its verdict respected: a
+  // reader thumbing through a grouped card's sources is not opening any of
+  // them, and marking each one read on the way past would empty the group.
+  const handleClick = (e: React.MouseEvent) => {
+    swipeHandlers.onClick(e);
+    if (!e.defaultPrevented && !read) markRead(active.slug);
+  };
 
   return (
     <Link
       href={`/article/${active.slug}`}
-      className="relative flex flex-col bg-background border-2 border-border rounded-lg p-5 hover:border-accent/40 transition-colors group h-[220px] overflow-hidden"
+      // `article-tile` and the attribute are the whole read-mark surface; the
+      // look itself is in globals.css. The slug is the one currently *shown*,
+      // not the group's primary, so swiping to another source asks about that
+      // source.
+      data-read-mark={read ? "" : undefined}
+      className="article-tile relative flex flex-col bg-background border-2 border-border rounded-lg p-5 hover:border-accent/40 group h-[220px] overflow-hidden"
       {...swipeHandlers}
+      onClick={handleClick}
     >
+      {/* The dim and the dot say "read" to the eye and to nothing else.
+          Announced before the headline so it qualifies the link a reader is
+          about to decide on, rather than arriving after they have heard it. */}
+      {read && <span className="sr-only">Read. </span>}
       <AnimatePresence mode="wait" custom={direction.current} initial={false}>
         <motion.div
           key={active.slug}

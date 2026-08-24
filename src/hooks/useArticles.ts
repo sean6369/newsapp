@@ -5,6 +5,7 @@ import useSWR, { useSWRConfig } from "swr";
 import { toast } from "@heroui/react";
 import { filtersToParams, buildSwrKey } from "@/lib/feed-query";
 import type { ArticleWithRelated, ArticleFilters } from "@/lib/types";
+import { noteServerFresh } from "@/components/ReadMarks";
 
 interface ArticlesData {
   articles: ArticleWithRelated[];
@@ -78,10 +79,22 @@ export function useArticles(initialFilters: ArticleFilters): UseArticlesReturn {
     swrKey,
     fetcher,
     {
-      revalidateOnFocus: false,
+      // Coming back to the tab is the one moment the feed is most likely to be
+      // out of date, and the only one the reader would notice: read marks are
+      // shared, so the phone in their pocket may have dimmed a card since this
+      // page rendered. Throttled to thirty seconds, against SWR's default of
+      // five: this refetches the whole day rather than just the marks, and the
+      // rest of the app deliberately makes no background requests. The window
+      // runs from the last fetch, so coming back after any real absence
+      // refetches at once — it only suppresses flicking between tabs.
+      revalidateOnFocus: true,
+      focusThrottleInterval: 30_000,
       revalidateIfStale: false,
       revalidateOnReconnect: false,
       keepPreviousData: true,
+      // A page of articles read *after* the read-marks switch was last thrown
+      // is authoritative again. See `noteServerFresh`.
+      onSuccess: noteServerFresh,
       // Poll while the current view has recently-added articles still awaiting a
       // relevance score (filled in by the pipeline's deferred scoring pass) so
       // they re-sort into place on their own, then return 0 to stop — an idle

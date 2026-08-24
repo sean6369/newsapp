@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { getFeedSourceOverrides } from "@/lib/db/queries";
 import { groupSourcesByFeed, resolveFeedSources } from "@/lib/feed-sources";
 import { FeedSettings } from "@/components/FeedSettings";
+import { ReadMarksProvider } from "@/components/ReadMarks";
+import { getReadMarksEnabled } from "@/lib/read-marks-server";
 
 export const metadata: Metadata = {
   title: "Settings — Leedon News",
@@ -18,9 +20,19 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function SettingsRoute() {
-  const groups = groupSourcesByFeed(
-    resolveFeedSources(await getFeedSourceOverrides())
-  );
+  const [overrides, readMarks] = await Promise.all([
+    getFeedSourceOverrides(),
+    getReadMarksEnabled(),
+  ]);
+  const groups = groupSourcesByFeed(resolveFeedSources(overrides));
 
-  return <FeedSettings groups={groups} />;
+  // The switch is drawn in the position the server already knows it to be in.
+  // One that rendered off and flicked on a moment later would read as the page
+  // having changed the setting, which is the one thing a settings page must
+  // never look like.
+  return (
+    <ReadMarksProvider enabled={readMarks}>
+      <FeedSettings groups={groups} />
+    </ReadMarksProvider>
+  );
 }

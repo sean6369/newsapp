@@ -277,3 +277,75 @@ body {
     transform: translateX(calc(-1 * var(--mh-frame)));
   }
 }
+
+/* -------------------------------------------------------------------------
+ * Read marks
+ *
+ * A card the reader has already opened recedes: same card, same place in the
+ * feed, just no longer asking for attention. Hovering brings it back to full
+ * strength, because "already read" should not mean "harder to read".
+ *
+ * The dot is what makes that hover exemption safe. Coming back from an article
+ * leaves the pointer sitting on the card that was just opened, so the dim is
+ * lifted at exactly the moment the reader is looking for confirmation that
+ * anything happened — the card would sit there at full strength until they
+ * happened to move the mouse. The dot does not answer to hover, so the change
+ * is legible even under the cursor. It is also the state the context menu's
+ * "Mark as unread" acts on, and an action to undo something needs something
+ * visible to undo.
+ *
+ * Drawn as a pseudo-element, absolutely positioned, so a card gaining or
+ * losing it never reflows the row it sits in.
+ *
+ * The state is carried by a custom property rather than a class because the
+ * dim and the dot both need it and they are set on different boxes — the card
+ * and its pseudo-element. `[data-read-mark]` is rendered by the server, which
+ * knows the answer: the marks live in Postgres, so the feed's HTML arrives
+ * with the read cards already dimmed and there is nothing to correct after
+ * hydration. See `read-marks.ts`.
+ *
+ * Unlayered on purpose: Tailwind's utilities live in `@layer utilities`, and
+ * a layered `opacity-*` or `hover:opacity-100` loses to anything outside a
+ * layer no matter how specific it is. That cuts both ways — it is also why
+ * `transition-property` is spelled out here rather than left to a
+ * `transition-colors` on the card, which this rule would silently replace.
+ * ------------------------------------------------------------------------- */
+
+[data-read-mark] {
+  --read-mark: 1;
+}
+
+.article-tile {
+  opacity: calc(1 - 0.45 * var(--read-mark, 0));
+  transition-property: opacity, color, border-color;
+  transition-duration: 200ms;
+  transition-timing-function: ease;
+}
+
+.article-tile:hover,
+.article-tile:focus-visible {
+  opacity: 1;
+}
+
+/* Tucked into the padding gutter above the favicon, clear of the source
+   switcher's arrows, which run down the middle of the card's left edge. */
+.article-tile::after {
+  content: "";
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--muted);
+  opacity: var(--read-mark, 0);
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .article-tile,
+  .article-tile::after {
+    transition-property: none;
+  }
+}

@@ -1,6 +1,6 @@
 import { eq, ne, gte, desc, asc, ilike, or, and, sql, isNull, inArray, type SQL } from "drizzle-orm";
 import { db } from "./index";
-import { articles, conversations, feedSources } from "./schema";
+import { articles, conversations, feedSources, readMarks, settings } from "./schema";
 import { EMBEDDING_MODEL } from "../gemini";
 import { LIBRARY_FEED, type Article, type ArticleFilters, type ChatMessage, type Conversation, type ConversationSummary, type FeedType, type SearchFilters, type SearchResponse, type SearchResultArticle } from "../types";
 import { groupByStory } from "../group-stories";
@@ -45,6 +45,21 @@ const articleColumns = {
   createdAt: articles.createdAt,
   sourceId: articles.sourceId,
   updatedAt: articles.updatedAt,
+  /**
+   * Read state, carried by the row rather than fetched as a set of its own.
+   *
+   * `exists` against a primary key, so it costs one index probe per row and
+   * the planner is free to turn it into a semi-join. The alternative — one
+   * query for the marks and a set shipped to the browser — grows with
+   * everything the reader has ever opened rather than with the page.
+   */
+  //
+  // Table names spelled out rather than interpolated from the schema objects.
+  // Drizzle drops the qualifier when it judges a column unambiguous, and here
+  // it judges wrong: `${readMarks.slug} = ${articles.slug}` renders as
+  // `"slug" = "slug"`, which inside the subquery is `read_marks.slug` compared
+  // against itself — true for every article the moment any mark exists.
+  read: sql<boolean>`exists (select 1 from "read_marks" rm where rm."slug" = "articles"."slug")`,
 } as const;
 
 export async function insertArticle(
@@ -409,6 +424,7 @@ function rowToArticle(row: {
   createdAt: Date;
   sourceId: string | null;
   updatedAt: Date | null;
+  read: boolean;
 }): Article {
   return {
     slug: row.slug,
@@ -428,6 +444,7 @@ function rowToArticle(row: {
     createdAt: row.createdAt.toISOString(),
     sourceId: row.sourceId ?? "",
     updatedAt: row.updatedAt?.toISOString() ?? null,
+    read: row.read,
   };
 }
 
@@ -461,7 +478,8 @@ const TITLE_HEADLINE_OPTIONS =
 const searchColumns = sql`
   a.slug, a.title, a.source_url, a.source_domain, a.summary, a.category,
   a.feed, a.date, a.reading_time, a.clipped, a.library, a.saved_at, a.relevance_score,
-  a.story_group, a.created_at, a.source_id, a.updated_at
+  a.story_group, a.created_at, a.source_id, a.updated_at,
+  exists (select 1 from read_marks rm where rm.slug = a.slug) AS read
 `;
 
 type SearchRow = {
@@ -482,6 +500,7 @@ type SearchRow = {
   created_at: string;
   source_id: string | null;
   updated_at: string | null;
+  read: boolean;
   rank: number;
   snippet: string | null;
   title_snippet: string | null;
@@ -519,6 +538,7 @@ function searchRowToArticle(r: SearchRow): SearchResultArticle {
       createdAt: parseNaiveTimestamp(r.created_at),
       sourceId: r.source_id,
       updatedAt: r.updated_at ? parseNaiveTimestamp(r.updated_at) : null,
+      read: r.read,
     }),
     rank: r.rank,
     snippet: r.snippet,
@@ -1360,4 +1380,63 @@ export async function deleteConversation(id: string): Promise<boolean> {
     .returning({ id: conversations.id });
 
   return deleted.length > 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Read marks
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Mark one article read or unread.
+ *
+ * Reading an article twice is not an event: the insert keeps the *first*
+ * `read_at` rather than refreshing it, because the column answers "when did
+ * this stop being new to me", and re-opening something to check a detail is
+ * not a second first reading.
+ *
+ * A slug that names no article is refused by the foreign key rather than
+ * stored, which is what keeps this table from accumulating marks for things
+ * the archive no longer has.
+ */
+export async function setReadMark(slug: string, read: boolean): Promise<void> {
+  if (read) {
+    await db.insert(readMarks).values({ slug }).onConflictDoNothing();
+  } else {
+    await db.delete(readMarks).where(eq(readMarks.slug, slug));
+  }
+}
+
+/** Forget every mark — what switching the feature off does. */
+export async function clearReadMarks(): Promise<void> {
+  await db.delete(readMarks);
+}
+
+/* -------------------------------------------------------------------------
+ * Settings
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One preference, or null if it has never been set.
+ *
+ * Null is the normal resting state for a setting nobody has touched. The
+ * caller decides what the default is; storing defaults eagerly would mean a
+ * change of default never reached anyone who had already loaded the app once.
+ */
+export async function getSetting(key: string): Promise<string | null> {
+  const rows = await db
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, key))
+    .limit(1);
+  return rows[0]?.value ?? null;
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  await db
+    .insert(settings)
+    .values({ key, value })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value: sql`excluded.value`, updatedAt: sql`now()` },
+    });
 }

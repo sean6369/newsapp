@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { Modal } from "@heroui/react/modal";
 import { shareViaTelegram } from "@/lib/telegram";
+import { useReadMarks } from "./ReadMarks";
 
 /** Never fires; the store's value differs only between server and client. */
 const subscribeNoop = () => () => {};
@@ -14,7 +15,10 @@ interface ArticleContextMenuProps {
   sourceUrl: string;
   sourceDomain: string;
   title: string;
-  children: (menuTrigger: React.ReactNode, setActiveSlug: (slug: string) => void) => React.ReactNode;
+  children: (
+    menuTrigger: React.ReactNode,
+    setActive: (active: { slug: string; read: boolean }) => void
+  ) => React.ReactNode;
   onRescore?: (slug: string) => void;
   onDelete?: (slug: string) => void;
   /**
@@ -23,15 +27,28 @@ interface ArticleContextMenuProps {
    * place in the feed, both survive.
    */
   deleteLabel?: string;
+  /**
+   * Offer the read/unread toggle. Only where the cards actually show the
+   * state: the library draws its own rows, which carry no read mark, so there
+   * the item would change something the reader cannot see.
+   */
+  readToggle?: boolean;
 }
 
-export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, children, onRescore, onDelete, deleteLabel = "Delete" }: ArticleContextMenuProps) {
+export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, children, onRescore, onDelete, deleteLabel = "Delete", readToggle = false }: ArticleContextMenuProps) {
   const slugRef = useRef(slug);
+  const readRef = useRef(false);
   const sourceUrlRef = useRef(sourceUrl);
   const sourceDomainRef = useRef(sourceDomain);
   const titleRef = useRef(title);
-  const setActiveSlug = useCallback((s: string) => { slugRef.current = s; }, []);
-  const [menu, setMenu] = useState<{ x: number; y: number; origin: string } | null>(null);
+  const setActive = useCallback((a: { slug: string; read: boolean }) => {
+    slugRef.current = a.slug;
+    readRef.current = a.read;
+  }, []);
+  // The slug is captured when the menu opens rather than read off the ref
+  // while rendering: a grouped card swaps `slugRef` as it is swiped, and the
+  // menu has to keep acting on — and describing — the source it was opened on.
+  const [menu, setMenu] = useState<{ x: number; y: number; origin: string; slug: string; read: boolean } | null>(null);
   // The feed server-renders its cards, and this portal targets document.body,
   // which does not exist there. Nothing is in the portal until a right-click
   // opens the menu, so waiting for hydration costs no visible markup — and it
@@ -56,6 +73,8 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
       x: Math.min(x, window.innerWidth - 180),
       y: Math.min(y, window.innerHeight - 60),
       origin,
+      slug: slugRef.current,
+      read: readRef.current,
     });
   }, []);
 
@@ -100,6 +119,15 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
     };
   }, [menu, close]);
 
+  const { enabled: readMarksOn, markRead, markUnread } = useReadMarks();
+
+  const handleToggleRead = () => {
+    if (!menu) return;
+    if (menu.read) markUnread(menu.slug);
+    else markRead(menu.slug);
+    close();
+  };
+
   const handleRescore = () => {
     onRescore?.(slugRef.current);
     close();
@@ -140,8 +168,8 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
 
   return (
     <div className="relative" onContextMenu={handleContextMenu}>
-      {/* eslint-disable-next-line react-hooks/refs -- setActiveSlug is a callback passed as a prop, not a ref read */}
-      {children(menuTrigger, setActiveSlug)}
+      {/* eslint-disable-next-line react-hooks/refs -- setActive is a callback passed as a prop, not a ref read */}
+      {children(menuTrigger, setActive)}
       {hydrated && createPortal(
         <AnimatePresence>
           {menu && (
@@ -154,6 +182,20 @@ export function ArticleContextMenu({ slug, sourceUrl, sourceDomain, title, child
               className="fixed z-50 w-[160px] bg-background border-2 border-border rounded-lg shadow-lg py-1"
               style={{ left: menu.x, top: menu.y, transformOrigin: menu.origin }}
             >
+              {/* First, because it is the only item that describes the card
+                  rather than acting on the article behind it — and the only
+                  one whose wording tells the reader which state they are
+                  currently in. Hidden entirely when the feature is switched
+                  off, where it would be a control for nothing. */}
+              {readToggle && readMarksOn && (
+                <button
+                  type="button"
+                  onClick={handleToggleRead}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-accent/10 transition-colors cursor-pointer"
+                >
+                  {menu.read ? "Mark as unread" : "Mark as read"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleShare}

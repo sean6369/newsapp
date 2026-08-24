@@ -47,6 +47,20 @@ export interface Article {
   createdAt: string;
   sourceId: string;
   updatedAt: string | null;
+  /**
+   * Whether the reader has opened this one.
+   *
+   * Strictly a fact about (reader, article) rather than about the article,
+   * and it lives here for the same reason `library` does: it travels with the
+   * row it describes. A page of articles carries its own read state, so the
+   * client never downloads a set of marks that grows with everything ever
+   * read — and a search page merged into the results already on screen brings
+   * its read state with it instead of needing a second set merged in parallel.
+   *
+   * False for anything the pipeline has just ingested, which is true rather
+   * than a placeholder: a story filed a minute ago has not been read.
+   */
+  read: boolean;
 }
 
 export interface ArticleWithRelated extends Article {

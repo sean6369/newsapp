@@ -171,12 +171,13 @@ export function ArticleGrid({ articles, loading, fetching, view = "grid", sort, 
               title={article.title}
               onRescore={onRescore}
               onDelete={handleDelete}
+              readToggle
             >
-              {(menuTrigger, setActiveSlug) =>
+              {(menuTrigger, setActive) =>
                 view === "list" ? (
-                  <ArticleRow article={article} rescoringArticles={rescoringArticles} menuTrigger={menuTrigger} onActiveSlugChange={setActiveSlug} />
+                  <ArticleRow article={article} rescoringArticles={rescoringArticles} menuTrigger={menuTrigger} onActiveChange={setActive} />
                 ) : (
-                  <ArticleCard article={article} rescoringArticles={rescoringArticles} menuTrigger={menuTrigger} onActiveSlugChange={setActiveSlug} />
+                  <ArticleCard article={article} rescoringArticles={rescoringArticles} menuTrigger={menuTrigger} onActiveChange={setActive} />
                 )
               }
             </ArticleContextMenu>
