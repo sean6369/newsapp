@@ -15,6 +15,33 @@ const turndown = new TurndownService({
 turndown.use(gfm);
 
 /**
+ * Text a publisher leaves where the rest of the article should have been.
+ *
+ * Independent evidence of truncation, and stronger than any length rule: it
+ * catches a teaser long enough to clear the character floor in
+ * `clipArticleContent`. Only add a phrase a *complete* article would never
+ * contain — these were checked against 70 fully-clipped Straits Times
+ * articles, none of which matched, so the markers cost nothing in false
+ * rejections.
+ *
+ * Kept as plain substrings rather than a hand-written pattern because they are
+ * matched two ways: as a regex against markdown the clipper has just produced,
+ * and as SQL against bodies already stored (`getClipsContaining`). One list
+ * feeds both, so an added phrase takes effect in both places at once.
+ *
+ * Deliberately literal — no regex metacharacters, no SQL wildcards — since
+ * each is interpolated into a pattern by its respective caller.
+ */
+export const TRUNCATION_MARKER_PHRASES = [
+  "Get unlimited access to exclusive stories",
+  "incisive insights from the ST newsroom",
+  "sign up or log in to continue reading",
+] as const;
+
+/** The phrases above, for testing text the clipper is holding in memory. */
+const TRUNCATION_MARKERS = new RegExp(TRUNCATION_MARKER_PHRASES.join("|"), "i");
+
+/**
  * Escape `<` in text so quoted markup stays quoted.
  *
  * Turndown escapes the markdown syntax characters (`*`, backtick, `[`, `_`, …)
@@ -156,11 +183,23 @@ async function clipArticleContent(url: string): Promise<ClipResult | null> {
 
   const html = await response.text();
 
-  // Skip paywalled articles (e.g. Straits Times premium)
-  if (html.includes('"isAccessibleForFree":false') || html.includes('"isAccessibleForFree": false')) {
-    console.warn(`[clipper] Paywalled article, skipping: ${url}`);
-    return null;
-  }
+  /**
+   * Whether the page *declares* itself paywalled, which is not the same as
+   * withholding the article.
+   *
+   * `isAccessibleForFree: false` is a metering declaration aimed at crawlers —
+   * "this counts against a quota" — and a metered publisher sets it on pages
+   * whose body it ships in full anyway. CNN does exactly that: the flag is
+   * present and all ~5,600 characters of the article are in the HTML, which is
+   * why those URLs read fine in a browser but used to save as link-only.
+   *
+   * So the flag only raises the bar the extraction has to clear (below); it no
+   * longer decides on its own. A publisher that really does gate — Straits
+   * Times premium — is still caught there, because what it returns is signup
+   * chrome and a single opening sentence, not an article.
+   */
+  const declaredPaywalled =
+    html.includes('"isAccessibleForFree":false') || html.includes('"isAccessibleForFree": false');
 
   const dom = new JSDOM(html, { url });
 
@@ -260,8 +299,29 @@ async function clipArticleContent(url: string): Promise<ClipResult | null> {
   // Clean up broken toggle links: [\n### Heading\n](#) → ### Heading
   markdown = markdown.replace(/\[\s*\n*(#{1,6}\s+[^\n]+)\n*\]\(#\)/g, "$1");
 
-  if (markdown.length < 100) {
-    console.warn(`[clipper] Content too short for ${url} (${markdown.length} chars)`);
+  /**
+   * A gated teaser clears the ordinary floor easily, so a page that declared
+   * itself paywalled has to produce a full article's worth of text to be
+   * believed. Measured across the sources this app actually pulls: a Straits
+   * Times teaser lands between 350 and 1,100 characters, an ordinary CNA
+   * article between 1,900 and 2,800, and a flagged-but-complete CNN article at
+   * ~5,600. The threshold sits in that gap.
+   *
+   * Pages that never set the flag keep the original floor, so nothing that
+   * clips today can start failing because of this.
+   */
+  const minChars = declaredPaywalled ? 1500 : 100;
+  if (markdown.length < minChars) {
+    const reason = declaredPaywalled ? "Paywalled" : "Content too short";
+    console.warn(`[clipper] ${reason} for ${url} (${markdown.length} chars)`);
+    return null;
+  }
+
+  // Checked after the floor rather than instead of it: a publisher that cuts
+  // an article off usually does it silently, so most teasers never carry a
+  // marker and only their length gives them away. This catches the rest.
+  if (TRUNCATION_MARKERS.test(markdown)) {
+    console.warn(`[clipper] Truncated at paywall for ${url} (${markdown.length} chars)`);
     return null;
   }
 

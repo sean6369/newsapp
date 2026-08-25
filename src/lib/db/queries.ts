@@ -383,6 +383,129 @@ export async function getExistingArticles(
   return { bySourceId, bySourceUrl };
 }
 
+/**
+ * Articles the clipper gave up on, newest failure first.
+ *
+ * Newest rather than oldest because `limit` would otherwise pin every run to
+ * the same head of the queue: the backlog is mostly articles that can never
+ * clip — subscriber-only publishers, real paywalls — and those accumulate at
+ * the old end. Ordering the other way spends each run's budget on the failures
+ * most likely to have been a timeout or a bad gateway, which is the case this
+ * retry exists for, and on the articles the reader might still want to read.
+ *
+ * Spans the library as well as the feed: a pasted link that failed to clip is
+ * the same repairable state as a feed article that did, and the reader who
+ * saved it is the one most likely to want the body.
+ */
+export async function getUnclippedArticles(
+  limit: number
+): Promise<{ slug: string; sourceUrl: string; sourceDomain: string }[]> {
+  return db
+    .select({
+      slug: articles.slug,
+      sourceUrl: articles.sourceUrl,
+      sourceDomain: articles.sourceDomain,
+    })
+    .from(articles)
+    .where(eq(articles.clipped, false))
+    .orderBy(desc(articles.createdAt))
+    .limit(limit);
+}
+
+/**
+ * Record a re-clip that succeeded.
+ *
+ * Separate from `updateArticleMetadata` because this is the one write that
+ * flips `clipped`, and it has to move `content` with it — a row claiming to be
+ * clipped while still holding the "[Read the original article]" stub would
+ * render as a full article with one link in it.
+ *
+ * `readingTime` only fills a gap, never overwrites. For a feed article the
+ * column is metadata the source supplied at ingest and has nothing to do with
+ * clipping: TLDR sends one, CNA and ST RSS do not. Overwriting would replace a
+ * publisher's own figure with an estimate, while leaving a zero in place would
+ * withhold a figure we can now measure — so the estimate is used exactly where
+ * there was nothing, which is also what the paste flow does.
+ */
+export async function markArticleClipped(
+  slug: string,
+  content: string,
+  readingTime: number
+): Promise<void> {
+  await db
+    .update(articles)
+    .set({
+      content,
+      clipped: true,
+      readingTime: sql`case when ${articles.readingTime} = 0 then ${readingTime} else ${articles.readingTime} end`,
+      updatedAt: new Date(),
+    })
+    .where(eq(articles.slug, slug));
+}
+
+/** How many articles currently claim to hold a clipped body. */
+export async function countClippedArticles(): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(articles)
+    .where(eq(articles.clipped, true));
+  return row?.count ?? 0;
+}
+
+/**
+ * Clipped articles whose stored body contains any of `phrases`.
+ *
+ * The match happens in Postgres rather than in the caller because the question
+ * is asked of the whole archive but answered by a handful of rows: pulling
+ * every clipped body back to filter in JavaScript moves tens of megabytes to
+ * find a couple of dozen articles, and that gap only widens as the archive
+ * grows.
+ *
+ * Callers pass literal substrings — see `TRUNCATION_MARKER_PHRASES`. They are
+ * wrapped in `%` here, so a phrase containing `%` or `_` would widen its own
+ * match; none do, and none should.
+ */
+export async function getClipsContaining(
+  phrases: readonly string[],
+  limit: number
+): Promise<{ slug: string; sourceUrl: string; sourceDomain: string }[]> {
+  if (phrases.length === 0) return [];
+
+  return db
+    .select({
+      slug: articles.slug,
+      sourceUrl: articles.sourceUrl,
+      sourceDomain: articles.sourceDomain,
+    })
+    .from(articles)
+    .where(
+      and(
+        eq(articles.clipped, true),
+        or(...phrases.map((phrase) => ilike(articles.content, `%${phrase}%`)))
+      )
+    )
+    .orderBy(desc(articles.createdAt))
+    .limit(limit);
+}
+
+/**
+ * Withdraw a clip, returning the row to the state a failed clip would have
+ * left it in.
+ *
+ * The inverse of `markArticleClipped`, and it has to move all three fields for
+ * the same reason: a row left holding teaser text while `clipped` goes false
+ * would show the `*summary` tag above a body that still looks like an article.
+ */
+export async function markArticleUnclipped(
+  slug: string,
+  stub: string
+): Promise<void> {
+  await db
+    .update(articles)
+    .set({ content: stub, readingTime: 0, clipped: false, updatedAt: new Date() })
+    .where(eq(articles.slug, slug));
+}
+
 export async function updateArticleMetadata(
   slug: string,
   updates: {
@@ -390,12 +513,24 @@ export async function updateArticleMetadata(
     sourceUrl?: string;
     summary?: string;
     content?: string;
+    /**
+     * Only set alongside `content`, and only upward.
+     *
+     * A re-clip that succeeds against an article stored as summary-only has to
+     * move this flag with the body it just supplied — see the call in
+     * `pipeline.ts`. Withdrawing a clip is deliberately not expressible here:
+     * that needs `markArticleUnclipped`, which also restores the stub.
+     */
+    clipped?: boolean;
+    readingTime?: number;
   }
 ): Promise<void> {
   const setClause: Record<string, unknown> = { updatedAt: new Date() };
   if (updates.title !== undefined) setClause.title = updates.title;
   if (updates.sourceUrl !== undefined) setClause.sourceUrl = updates.sourceUrl;
   if (updates.summary !== undefined) setClause.summary = updates.summary;
+  if (updates.clipped !== undefined) setClause.clipped = updates.clipped;
+  if (updates.readingTime !== undefined) setClause.readingTime = updates.readingTime;
   if (updates.content !== undefined) {
     setClause.content = updates.content;
   }

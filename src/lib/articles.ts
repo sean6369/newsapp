@@ -51,18 +51,63 @@ export function makeSlug(title: string, sourceId: string): string {
   return base ? `${base}-${suffix}` : `article-${suffix}`;
 }
 
+/** Words a minute, for the reading-time estimate. The usual prose figure. */
+const WORDS_PER_MINUTE = 200;
+
+/**
+ * Markdown to plain prose.
+ *
+ * Used for counting words and for the library's summary fallback — both want
+ * the sentences without the syntax carrying them.
+ */
+export function stripMarkdown(markdown: string): string {
+  return markdown
+    .replace(/^!\[[^\]]*\]\([^)]*\)\s*/gm, "") // leading images
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/[*_`>]/g, "")
+    .replace(/\\(.)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Reading-time estimate for a clipped body, in minutes. Zero for no body.
+ *
+ * Lives here rather than beside the paste flow because every path that can
+ * supply a body needs it: ingest, a pasted link, the pipeline's re-clip after
+ * a feed retitles something, and the retry pass. A row stored while its clip
+ * was failing holds `0`, and whichever path later supplies the text has to
+ * recompute this with it or the card keeps hiding the "N min" chip.
+ */
+export function estimateReadingTime(markdown: string): number {
+  const words = stripMarkdown(markdown).split(/\s+/).filter(Boolean).length;
+  return words ? Math.max(1, Math.round(words / WORDS_PER_MINUTE)) : 0;
+}
+
+/**
+ * What an article's body is when there is no body — the one link the reader
+ * can still follow.
+ *
+ * Shared so that a clip which is later withdrawn (see `lib/reclip.ts`) lands
+ * back on exactly the text it would have had if the clip had failed the first
+ * time, rather than a second stub that only looks the same.
+ */
+export function stubContent(sourceUrl: string): string {
+  return sourceUrl.includes("news.ycombinator.com/item")
+    ? `[View discussion on Hacker News](${sourceUrl})`
+    : `[Read the original article](${sourceUrl})`;
+}
+
 export function buildArticle(
   rawArticle: RawArticle,
   clippedContent: string | null
 ): { article: Article; content: string } {
   const slug = makeSlug(rawArticle.title, rawArticle.sourceId);
 
-  const isHNDiscussion = rawArticle.sourceUrl.includes("news.ycombinator.com/item");
-  const content = clippedContent
-    ? clippedContent
-    : isHNDiscussion
-      ? `[View discussion on Hacker News](${rawArticle.sourceUrl})`
-      : `[Read the original article](${rawArticle.sourceUrl})`;
+  const content = clippedContent ?? stubContent(rawArticle.sourceUrl);
 
   const article: Article = {
     slug,

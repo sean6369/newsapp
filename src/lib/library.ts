@@ -1,6 +1,6 @@
 import { JSDOM } from "jsdom";
 import { clipArticle } from "./clipper";
-import { extractDomain, makeSlug } from "./articles";
+import { estimateReadingTime, extractDomain, makeSlug, stripMarkdown, stubContent } from "./articles";
 import { archiveToday } from "./dates";
 import { LIBRARY_FEED, type Article } from "./types";
 
@@ -14,9 +14,6 @@ import { LIBRARY_FEED, type Article } from "./types";
  * itself — and recovered without a model call, since the library is
  * reader-paced and unbudgeted while the Gemini quota is neither.
  */
-
-/** Words a minute, for the reading-time estimate. The usual prose figure. */
-const WORDS_PER_MINUTE = 200;
 
 /** Summary length before the trailing "…". Two lines on a card. */
 const SUMMARY_LIMIT = 220;
@@ -75,20 +72,6 @@ export function isBlockedHost(hostname: string): boolean {
   }
 
   return false;
-}
-
-/** Markdown to plain prose, for the summary fallback. */
-function stripMarkdown(markdown: string): string {
-  return markdown
-    .replace(/^!\[[^\]]*\]\([^)]*\)\s*/gm, "") // leading images
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>]+>/g, "")
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/[*_`>]/g, "")
-    .replace(/\\(.)/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function truncate(text: string, limit: number): string {
@@ -183,9 +166,7 @@ export async function buildLibraryClip(
 
   const summary = truncate(preferred || body, SUMMARY_LIMIT) || `Saved from ${sourceDomain}`;
 
-  const readingTime = body
-    ? Math.max(1, Math.round(body.split(/\s+/).length / WORDS_PER_MINUTE))
-    : 0;
+  const readingTime = clipped ? estimateReadingTime(clipped.content) : 0;
 
   // Namespaced rather than the bare URL `extractSourceId` would return, so a
   // clip and the pipeline's copy of the same article stay distinct rows under
@@ -222,7 +203,7 @@ export async function buildLibraryClip(
     read: false,
   };
 
-  const content = clipped?.content ?? `[Read the original article](${url})`;
+  const content = clipped?.content ?? stubContent(url);
 
   return { article, content };
 }

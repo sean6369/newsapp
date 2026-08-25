@@ -2,7 +2,7 @@ import { format } from "date-fns";
 import { fetchDigestUrls, scrapeDigestPage, fetchCNAArticles, fetchSTArticles } from "./feeds";
 import { resolveFeedSources } from "./feed-sources";
 import { clipArticle } from "./clipper";
-import { buildArticle } from "./articles";
+import { buildArticle, estimateReadingTime } from "./articles";
 import {
   insertArticle,
   getExistingArticles,
@@ -180,13 +180,26 @@ export async function runFetchPipeline(options?: {
 
       if (titleChanged || urlChanged) {
         // Build metadata updates — slug stays unchanged
-        const updates: { title?: string; sourceUrl?: string; content?: string } = {};
+        const updates: {
+          title?: string;
+          sourceUrl?: string;
+          content?: string;
+          clipped?: boolean;
+          readingTime?: number;
+        } = {};
         if (titleChanged) updates.title = a.title;
         if (urlChanged) updates.sourceUrl = a.sourceUrl;
 
-        // Re-clip from the current URL
+        // Re-clip from the current URL. The flag and the reading time move with
+        // the body: this is the one path that can clip an article which failed
+        // at ingest, and writing the text alone would leave it a full article
+        // still wearing the `*summary` tag and showing no reading time.
         const reclipped = await clipArticle(a.sourceUrl);
-        if (reclipped) updates.content = reclipped.content;
+        if (reclipped) {
+          updates.content = reclipped.content;
+          updates.clipped = true;
+          updates.readingTime = estimateReadingTime(reclipped.content);
+        }
 
         try {
           await updateArticleMetadata(existing.slug, updates);
