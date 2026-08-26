@@ -22,6 +22,21 @@ export async function runMigrations() {
   const migrationsFolder = `${process.cwd()}/drizzle`;
 
   console.log("[migrate] Applying migrations from", migrationsFolder);
-  await migrate(db, { migrationsFolder });
+  try {
+    await migrate(db, { migrationsFolder });
+  } catch (error) {
+    console.error("[migrate] Migration failed:", error);
+    // Next logs a rejection thrown from `register` and then carries on serving,
+    // which is the worst of the options here: a container that cannot reach its
+    // database, or stopped half way through a migration, stays "up" and answers
+    // requests with errors, and `restart: unless-stopped` never fires because
+    // nothing exited. Exiting hands the decision back to the orchestrator,
+    // which retries — and a database still starting up becomes a few restarts
+    // rather than a permanently broken app.
+    if (process.env.NODE_ENV === "production") process.exit(1);
+    // In development the reverse is true: dropping the dev server over a
+    // database that is momentarily down costs more than it saves.
+    throw error;
+  }
   console.log("[migrate] Database up to date");
 }
