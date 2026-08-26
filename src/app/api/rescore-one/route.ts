@@ -16,6 +16,22 @@ export async function POST(request: NextRequest) {
     feed: article.feed,
   });
 
+  // `null` means the call never reached a verdict — most often the daily Gemini
+  // quota, which `scoreArticle` short-circuits without leaving the process.
+  // Writing it would erase whatever score the article already had, turning a
+  // rescore that could not run into a rescore that destroyed data. The pipeline
+  // guards its own writes the same way; this route did not.
+  if (score === null) {
+    console.warn(
+      `[rescore-one] No score for ${article.title.slice(0, LOG_TITLE_LEN)} — ` +
+        `left at ${article.relevanceScore}`
+    );
+    return NextResponse.json(
+      { error: "Couldn't score that just now — its score is unchanged" },
+      { status: 503 }
+    );
+  }
+
   await updateRelevanceScore(slug, score);
 
   console.log(`[rescore-one] ${article.title.slice(0, LOG_TITLE_LEN)} → ${score}`);

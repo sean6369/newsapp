@@ -157,7 +157,11 @@ export function useArticles(initialFilters: ArticleFilters): UseArticlesReturn {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ slug }),
     })
-      .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
+      .then(async (res) => {
+        if (res.ok) return res.json();
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Couldn't rescore that");
+      })
       .then((resData) => {
         mutate(
           (current) => {
@@ -179,7 +183,17 @@ export function useArticles(initialFilters: ArticleFilters): UseArticlesReturn {
         );
         setLastRescoredSlug(slug);
       })
-      .catch((err) => console.error("[rescore]", err))
+      .catch((err: Error) => {
+        console.error("[rescore]", err);
+        // The stored score is left untouched when a rescore cannot run, so
+        // there is nothing to roll back — but the reader asked for this one
+        // and would otherwise watch the spinner stop and nothing change.
+        toast.danger(
+          err instanceof TypeError
+            ? "Couldn't reach the server — the score is unchanged"
+            : err.message
+        );
+      })
       .finally(() => {
         setRescoringArticles((prev) => {
           const next = new Set(prev);

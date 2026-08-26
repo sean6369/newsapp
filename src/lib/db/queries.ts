@@ -802,7 +802,13 @@ export async function searchArticles(
   // A domain-only hit scores 0 from `ts_rank_cd`, so these sort below genuine
   // text matches and fall back to date order among themselves — which is the
   // right shape for "show me everything from this outlet".
-  const domainMatch = sql`a.source_domain ILIKE ${`%${trimmed.replace(/[\%_]/g, "\$&")}%`}`;
+  // `%`, `_` and `\` are ILIKE metacharacters, escaped here rather than left to
+  // widen their own match: searching "100%" should find an outlet whose name
+  // contains "100%", not return the whole archive. `\` is ILIKE's default
+  // escape character, so it has to escape itself too — and the replacement is
+  // `\\$&` rather than `\$&`, since the latter is just `$&` in a JS string
+  // literal and expands to the match, leaving the input untouched.
+  const domainMatch = sql`a.source_domain ILIKE ${`%${trimmed.replace(/[\\%_]/g, "\\$&")}%`}`;
 
   const orderBy =
     sort === "date-asc"
