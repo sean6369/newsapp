@@ -20,16 +20,31 @@ services:
       - newsapp-net
 
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg18
     container_name: newsapp-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: newsapp
       POSTGRES_PASSWORD: newsapp
       POSTGRES_DB: newsapp
+    # Loopback only, deliberately. The password above is in plaintext in this
+    # file, so binding "5432:5432" would offer the whole archive to anything on
+    # the LAN. Reach it from another machine over an SSH tunnel instead:
+    #   ssh -L 5433:127.0.0.1:5432 seanlsk@192.168.1.150
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # One mount at /var/lib/postgresql, not at .../data. Postgres 18 moved
+      # PGDATA to /var/lib/postgresql/18/docker, and the image refuses to start
+      # against the old path — see docker-library/postgres#37. The version lives
+      # inside the volume now, which is what lets `pg_upgrade --link` work later
+      # without crossing a mount boundary.
+      - pg_data:/var/lib/postgresql
+      # No init.sql mount. The extensions it created (vector, pg_trgm) are
+      # created by drizzle/0000_init.sql on startup instead, which covers every
+      # database rather than only a freshly initialised volume. Keeping the
+      # mount meant a missing file on the host became a directory Docker
+      # invented, which the entrypoint then failed to run as SQL.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U newsapp"]
       interval: 5s
