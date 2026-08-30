@@ -1,5 +1,31 @@
 @AGENTS.md
 
+## Local development
+
+The app runs on the host; only Postgres runs in Docker.
+
+```bash
+docker compose -f docker-compose.local.yml up -d   # database on 5432
+npm run dev                                        # app on 3000
+```
+
+`docker-compose.local.yml` is the local file, `docker-compose.yml` is the server's,
+and they are not interchangeable. The server file declares its own `pg_data` volume,
+which Compose would create empty, and claims the same container name and host port —
+so running it here either collides outright or quietly serves a second, empty archive.
+
+The dev archive lives in volume `newsapp_pg18_data`, declared `external` so that
+`docker compose down -v` cannot delete it. Treat it as the only live copy: there is no
+replica, and the volume sits inside Docker Desktop's disk image, where Time Machine
+cannot see it. Dump it to a real file instead.
+
+```bash
+docker exec newsapp-db pg_dump -U newsapp -Fc newsapp > ~/newsapp-$(date +%Y%m%d).dump
+```
+
+`DATABASE_URL` points at `localhost:5432`. The port is a property of the container's
+`-p` flag, not of `.env` — editing one without the other just aims at a dead port.
+
 ## Deploy
 
 To deploy changes to the homelab server (news.oxleypawnshop.com):

@@ -1,0 +1,46 @@
+# Local development database only. The app runs on the host via `npm run dev`,
+# so nothing here builds or serves it — this file exists to keep the `docker
+# run` that creates newsapp-db out of shell history, where it has been lost
+# once already.
+#
+#   docker compose -f docker-compose.local.yml up -d
+#
+# Do NOT use the sibling docker-compose.yml locally. That one is the server's:
+# it declares its own pg_data volume, which Compose would create empty, and it
+# claims the same container name and host port as this file.
+
+name: newsapp-local
+
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: newsapp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: newsapp
+      POSTGRES_PASSWORD: newsapp
+      POSTGRES_DB: newsapp
+    # 5432, matching .env. It sat on 5433 until 2026-08-30 — scaffolding left
+    # over from the pg17→pg18 dump/restore, when both containers ran at once
+    # and pg17 held 5432. 5433 is now free for the prod tunnel in CLAUDE.md,
+    # which could never bind while this container squatted it.
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # One mount at /var/lib/postgresql, not at .../data: Postgres 18 moved
+      # PGDATA to /var/lib/postgresql/18/docker and refuses to start against
+      # the old path. PGDATA comes from the image, so it is not set here.
+      - pg18_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newsapp"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  # external: Compose neither creates nor deletes this volume, and
+  # `docker compose down -v` refuses to touch it. That matters — it holds the
+  # only live copy of the archive. The dated dumps in ~ are the other copy.
+  pg18_data:
+    external: true
+    name: newsapp_pg18_data
