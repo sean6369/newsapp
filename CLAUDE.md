@@ -46,12 +46,34 @@ answering 502.
 - Database: PostgreSQL 18 (container: newsapp-db), published to 127.0.0.1 only
 - Tunnel: Cloudflare, subdomain: news.oxleypawnshop.com
 
+### Preparing a bare machine
+
+Everything below assumes Docker, SSH and the Cloudflare connector already exist. After
+an OS reinstall none of them do, and none can be recovered from this repo:
+
+- **Docker Engine and the compose plugin.** On Debian/Ubuntu,
+  `curl -fsSL https://get.docker.com | sh`, then `sudo usermod -aG docker $USER` and
+  log back in.
+- **Key-based SSH for `seanlsk`.** Every deploy command here opens with
+  `ssh seanlsk@192.168.1.150`.
+- **The address `192.168.1.150`**, hardcoded in this file and in the tunnel command
+  below. A fresh install takes whatever DHCP offers unless the router holds a
+  reservation for it.
+- **The Cloudflare connector.** The tunnel is a cloud-side object and survives the
+  wipe; the connector credentials on the server do not. Reinstall `cloudflared`, run
+  it with the existing tunnel's token from the Zero Trust dashboard, and confirm the
+  `news.oxleypawnshop.com` public hostname still maps to `http://localhost:3002`.
+- **`.env`.** Both API keys are gitignored, so the only working copies are on the
+  development Mac.
+
 ### First deploy on a fresh server
 
 `~/newsapp/` needs exactly two files: `docker-compose.yml`, and a `.env` holding
-`GEMINI_API_KEY` and `OPENAI_API_KEY`. Compose reads no other host file — anything
-missing from `.env` is substituted as an empty string, which boots an app that looks
-healthy and fails only where it calls a model.
+`GEMINI_API_KEY` and `OPENAI_API_KEY`. Compose reads no other host file. Those two
+keys have no fallback, so a `.env` missing either substitutes an empty string and
+boots an app that looks healthy and fails only where it calls a model. The rest of
+the interpolated settings — `GEMINI_CHAT_MODEL`, `OPENAI_CHAT_MODEL`,
+`ENABLE_PIPELINE` — carry `:-` defaults and are genuinely optional.
 
 Nothing about the schema is done by hand. `instrumentation.ts` runs the `drizzle/`
 migrations before the first request, creating every table, index and extension against

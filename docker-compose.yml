@@ -11,7 +11,15 @@ services:
       GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.5-flash-lite}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.4}
+      # Read as `=== "false"` at all four call sites, so only that exact string
+      # disables the pipeline — "0", "no" and "off" all leave it running.
       ENABLE_PIPELINE: ${ENABLE_PIPELINE:-true}
+      # Both have defaults in code, so leaving them unset is fine. They are
+      # named here because nothing else advertises them: the TPM ceiling is
+      # deliberately conservative for a free key (see lib/embeddings.ts) and a
+      # paid key wants it raised.
+      # GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
+      # GEMINI_EMBED_TPM: ${GEMINI_EMBED_TPM:-25000}
       GOTENBERG_URL: http://gotenberg:3000
     depends_on:
       db:
@@ -50,6 +58,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      # Without this, initdb on a fresh volume gets only interval x retries =
+      # 25s to finish before the container is marked unhealthy and the app's
+      # `condition: service_healthy` refuses to start it. That is the first
+      # boot on a new server, which is the one boot nobody is watching.
+      start_period: 30s
     networks:
       - newsapp-net
 
