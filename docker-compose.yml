@@ -38,7 +38,7 @@ services:
     # Loopback only, deliberately. The password above is in plaintext in this
     # file, so binding "5432:5432" would offer the whole archive to anything on
     # the LAN. Reach it from another machine over an SSH tunnel instead:
-    #   ssh -L 5433:127.0.0.1:5432 seanlsk@192.168.1.150
+    #   ssh -L 5434:127.0.0.1:5432 seanlsk@192.168.1.150
     ports:
       - "127.0.0.1:5432:5432"
     volumes:

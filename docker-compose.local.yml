@@ -20,12 +20,13 @@ services:
       POSTGRES_USER: newsapp
       POSTGRES_PASSWORD: newsapp
       POSTGRES_DB: newsapp
-    # 5432, matching .env. It sat on 5433 until 2026-08-30 — scaffolding left
-    # over from the pg17→pg18 dump/restore, when both containers ran at once
-    # and pg17 held 5432. 5433 is now free for the prod tunnel in CLAUDE.md,
-    # which could never bind while this container squatted it.
+    # 5433, matching .env. Three things want a Postgres port on this machine
+    # and each gets its own: 5432 belongs to Postgres.app, which is native,
+    # starts on login and is what every other tool assumes; 5433 is this
+    # container; 5434 is the SSH tunnel to prod in CLAUDE.md. This briefly sat
+    # on 5432 on 2026-08-30, which stopped Postgres.app from starting at all.
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       # One mount at /var/lib/postgresql, not at .../data: Postgres 18 moved
       # PGDATA to /var/lib/postgresql/18/docker and refuses to start against

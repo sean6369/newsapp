@@ -5,7 +5,7 @@
 The app runs on the host; only Postgres runs in Docker.
 
 ```bash
-docker compose -f docker-compose.local.yml up -d   # database on 5432
+docker compose -f docker-compose.local.yml up -d   # database on 5433
 npm run dev                                        # app on 3000
 ```
 
@@ -23,8 +23,13 @@ cannot see it. Dump it to a real file instead.
 docker exec newsapp-db pg_dump -U newsapp -Fc newsapp > ~/newsapp-$(date +%Y%m%d).dump
 ```
 
-`DATABASE_URL` points at `localhost:5432`. The port is a property of the container's
+`DATABASE_URL` points at `localhost:5433`. The port is a property of the container's
 `-p` flag, not of `.env` — editing one without the other just aims at a dead port.
+
+Three Postgres ports are in play on the development Mac and each is spoken for. 5432
+belongs to Postgres.app, which is native, starts on login and is what every other tool
+assumes; 5433 is this container; 5434 is the tunnel to prod below. Putting the
+container on 5432 stops Postgres.app from starting at all, silently, at every login.
 
 ## Deploy
 
@@ -84,8 +89,11 @@ the signal to read the logs is a container that will not stay up.
 
 The Postgres port is published to `127.0.0.1` and must stay that way: the password sits
 in plaintext in `docker-compose.yml`, so binding `0.0.0.0` would offer the archive to
-the whole LAN. Tunnel over SSH instead, then connect a client to `localhost:5433`:
+the whole LAN. Tunnel over SSH instead, then connect a client to `localhost:5434`:
 
 ```bash
-ssh -L 5433:127.0.0.1:5432 seanlsk@192.168.1.150
+ssh -L 5434:127.0.0.1:5432 seanlsk@192.168.1.150
 ```
+
+5434 rather than the obvious 5432 or 5433: both are already taken on the development
+Mac, and `-L` binds the *local* end, so a tunnel onto either would fail to bind.
