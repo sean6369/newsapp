@@ -6,26 +6,20 @@ services:
     ports:
       - "3002:3000"
     environment:
-      DATABASE_URL: postgresql://newsapp:newsapp@db:5432/newsapp
+      DATABASE_URL: postgresql://newsapp:${POSTGRES_PASSWORD}@db:5432/newsapp
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.5-flash-lite}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.4}
-      # Read as `=== "false"` at all four call sites, so only that exact string
-      # disables the pipeline — "0", "no" and "off" all leave it running.
-      ENABLE_PIPELINE: ${ENABLE_PIPELINE:-true}
-      # Both have defaults in code, so leaving them unset is fine. They are
-      # named here because nothing else advertises them: the TPM ceiling is
-      # deliberately conservative for a free key (see lib/embeddings.ts) and a
-      # paid key wants it raised.
-      # GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
-      # GEMINI_EMBED_TPM: ${GEMINI_EMBED_TPM:-25000}
+      # Pinned against the code default changing on a future image pull.
+      # The immovable part is the 1536 dimensions, hardcoded in gemini.ts and
+      # declared as vector(1536) on articles.embedding. A different model name
+      # is handled gracefully (rows carry embedding_model and re-embed), but
+      # only if the replacement also returns 1536 dims.
+      GEMINI_EMBEDDING_MODEL: gemini-embedding-2
       GOTENBERG_URL: http://gotenberg:3000
     depends_on:
       db:
         condition: service_healthy
-    networks:
-      - newsapp-net
+    networks: [newsapp-net]
 
   db:
     image: pgvector/pgvector:pg18
@@ -33,47 +27,36 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: newsapp
-      POSTGRES_PASSWORD: newsapp
+      # Read ONLY at initdb, on an empty volume. After that the password lives
+      # in the database. Rotating this secret alone breaks auth — see runbook.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: newsapp
-    # Loopback only, deliberately. The password above is in plaintext in this
-    # file, so binding "5432:5432" would offer the whole archive to anything on
-    # the LAN. Reach it from another machine over an SSH tunnel instead:
-    #   ssh -L 5434:127.0.0.1:5432 seanlsk@192.168.1.150
-    ports:
-      - "127.0.0.1:5432:5432"
     volumes:
-      # One mount at /var/lib/postgresql, not at .../data. Postgres 18 moved
-      # PGDATA to /var/lib/postgresql/18/docker, and the image refuses to start
-      # against the old path — see docker-library/postgres#37. The version lives
-      # inside the volume now, which is what lets `pg_upgrade --link` work later
-      # without crossing a mount boundary.
+      # One mount at /var/lib/postgresql, NOT .../data — pg18 moved PGDATA.
       - pg_data:/var/lib/postgresql
-      # No init.sql mount. The extensions it created (vector, pg_trgm) are
-      # created by drizzle/0000_init.sql on startup instead, which covers every
-      # database rather than only a freshly initialised volume. Keeping the
-      # mount meant a missing file on the host became a directory Docker
-      # invented, which the entrypoint then failed to run as SQL.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U newsapp"]
       interval: 5s
       timeout: 3s
       retries: 5
-      # Without this, initdb on a fresh volume gets only interval x retries =
-      # 25s to finish before the container is marked unhealthy and the app's
-      # `condition: service_healthy` refuses to start it. That is the first
-      # boot on a new server, which is the one boot nobody is watching.
+      # initdb on a fresh volume needs longer than interval x retries = 25s,
+      # or the app's service_healthy gate refuses to start on first boot.
       start_period: 30s
-    networks:
-      - newsapp-net
+    networks: [newsapp-net]
 
   gotenberg:
     image: gotenberg/gotenberg:8
+    container_name: newsapp-gotenberg
     restart: unless-stopped
-    networks:
-      - newsapp-net
+    networks: [newsapp-net]
 
 volumes:
   pg_data:
+    # external: Compose will NOT create this if missing, and `down -v` cannot
+    # remove it. A destroyed volume becomes a startup failure instead of a
+    # silently empty database. Create once: docker volume create newsapp_pg_data
+    external: true
+    name: newsapp_pg_data
 
 networks:
   newsapp-net:
