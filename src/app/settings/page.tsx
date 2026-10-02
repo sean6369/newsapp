@@ -6,7 +6,7 @@ import { ReadMarksProvider } from "@/components/ReadMarks";
 import { getReadMarksEnabled } from "@/lib/read-marks-server";
 
 export const metadata: Metadata = {
-  title: "Settings — Leedon News",
+  title: "Settings — A Calmer News",
   description: "Choose which sources each feed is pulled from.",
 };
 

@@ -28,7 +28,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Leedon News",
+  title: "A Calmer News",
   description: "A Calmer News Platform",
   appleWebApp: {
     capable: true,

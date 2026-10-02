@@ -7,7 +7,7 @@ import { SEARCH_VIEW_COOKIE, parseViewCookie } from "@/lib/view-cookie";
 import { getReadMarksEnabled } from "@/lib/read-marks-server";
 
 export const metadata = {
-  title: "Search - Leedon News",
+  title: "Search — A Calmer News",
 };
 
 export default async function SearchRoute({

@@ -4,7 +4,7 @@ import { LibraryPage } from "@/components/LibraryPage";
 import { LIBRARY_VIEW_COOKIE, parseViewCookie } from "@/lib/view-cookie";
 
 export const metadata: Metadata = {
-  title: "Library — Leedon News",
+  title: "Library — A Calmer News",
   description: "Articles you clipped yourself.",
 };
 
