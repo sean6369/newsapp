@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "@heroui/react";
-import { filtersToParams, buildSwrKey } from "@/lib/feed-query";
+import { filtersFromParams, filtersToParams, buildSwrKey } from "@/lib/feed-query";
 import type { ArticleWithRelated, ArticleFilters } from "@/lib/types";
 import { noteServerFresh } from "@/components/ReadMarks";
 
@@ -59,7 +59,19 @@ export function useArticles(initialFilters: ArticleFilters): UseArticlesReturn {
   // request to. Keeping it that way through the whole session is what lets a
   // cold load settle on one SWR key and stay there: the page seeds that key
   // from the server, the hook mounts on it, and nothing re-keys behind it.
-  const [filters, setFiltersState] = useState<ArticleFilters>(initialFilters);
+  //
+  // The address, not the prop, is where a remount picks up. Every filter change
+  // below rewrites the URL with replaceState and never asks the server for a
+  // new render, so `initialFilters` stays frozen at whatever the page first
+  // loaded with. Back from an article, the router restores that cached render
+  // and its stale props, and the feed would open on the newest day under an
+  // address that still names the one the reader left. On a cold load the two
+  // agree, so hydration sees the same filters the server rendered.
+  const [filters, setFiltersState] = useState<ArticleFilters>(() =>
+    typeof window === "undefined"
+      ? initialFilters
+      : filtersFromParams(new URLSearchParams(window.location.search))
+  );
   const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
   const filtersRef = useRef(filters);
   filtersRef.current = filters; // eslint-disable-line react-hooks/refs -- keep ref in sync with latest state for use in callbacks
