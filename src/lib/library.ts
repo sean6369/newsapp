@@ -1,5 +1,6 @@
 import { JSDOM } from "jsdom";
 import { clipArticle } from "./clipper";
+import { guardedFetch } from "./guarded-fetch";
 import { estimateReadingTime, extractDomain, makeSlug, stripMarkdown, stubContent } from "./articles";
 import { archiveToday } from "./dates";
 import { LIBRARY_FEED, type Article } from "./types";
@@ -35,58 +36,6 @@ const BROWSER_HEADERS = {
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
-
-/**
- * Whether a host is one the server should refuse to fetch.
- *
- * Every other fetch in this app aims at a URL the app itself chose — a
- * configured feed, or a link found inside one. This is the only one aimed by
- * whoever is looking at the page, and the server sits on a private network
- * beside a database, a tailnet and the cloud's metadata service, so an
- * unfiltered fetch would let a paste reach them and report back what it found.
- *
- * Literal addresses and obvious internal suffixes only: a public hostname that
- * resolves to a private address still gets through, which would need a
- * resolve-then-connect check to close. This is the proportionate half — it
- * stops the paste that names the target outright.
- */
-export function isBlockedHost(hostname: string): boolean {
-  let host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // .ts.net is Tailscale's MagicDNS: names under it resolve to tailnet peers.
-  if (/\.(local|internal|home|lan|ts\.net)$/.test(host)) return true;
-  if (host === "::" || host === "::1" || host.startsWith("fe80:") || /^f[cd][0-9a-f]{2}:/.test(host)) return true;
-
-  // IPv4-mapped IPv6 connects to the IPv4 address it carries, so it has to
-  // face the same rules. The URL parser rewrites the dotted spelling into hex —
-  // [::ffff:127.0.0.1] arrives here as ::ffff:7f00:1 — so both are unpacked.
-  const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (mappedHex) {
-    const [hi, lo] = mappedHex.slice(1).map((h) => parseInt(h, 16));
-    host = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
-  } else if (host.startsWith("::ffff:")) {
-    host = host.slice("::ffff:".length);
-  }
-
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const [a, b] = ipv4.slice(1).map(Number);
-    return (
-      a === 0 ||
-      a === 10 ||
-      // Carrier-grade NAT space, which is where every Tailscale address lives.
-      (a === 100 && b >= 64 && b <= 127) ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224
-    );
-  }
-
-  return false;
-}
 
 function truncate(text: string, limit: number): string {
   if (text.length <= limit) return text;
@@ -128,7 +77,7 @@ function titleFromUrl(url: string): string {
  */
 async function fetchPageMeta(url: string): Promise<{ title: string; description: string }> {
   try {
-    const response = await fetch(url, {
+    const response = await guardedFetch(url, {
       headers: BROWSER_HEADERS,
       signal: AbortSignal.timeout(10000),
       redirect: "follow",

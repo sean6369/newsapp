@@ -4,6 +4,7 @@ import TurndownService from "turndown";
 // @ts-expect-error -- no type declarations for turndown-plugin-gfm
 import { gfm } from "turndown-plugin-gfm";
 import { ALLOWED_EMBED_PATTERN } from "./markdown-sanitize";
+import { guardedFetch } from "./guarded-fetch";
 
 const turndown = new TurndownService({
   headingStyle: "atx",
@@ -113,7 +114,7 @@ export interface ClipResult {
 
 async function resolveUrl(shortUrl: string): Promise<string | null> {
   try {
-    const res = await fetch(shortUrl, {
+    const res = await guardedFetch(shortUrl, {
       method: "HEAD",
       redirect: "follow",
       signal: AbortSignal.timeout(10000),
@@ -165,7 +166,7 @@ async function clipTweet(url: string): Promise<ClipResult | null> {
 }
 
 async function clipArticleContent(url: string): Promise<ClipResult | null> {
-  const response = await fetch(url, {
+  const response = await guardedFetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

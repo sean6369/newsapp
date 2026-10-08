@@ -348,9 +348,13 @@ Guards worth knowing about:
   service (`169.254.169.254`) around it. Literal loopback, link-local, private IPv4
   ranges, the `100.64.0.0/10` range Tailscale addresses live in, ULA/link-local IPv6,
   IPv4-mapped IPv6 spellings of any of those, and `.local` / `.internal` / `.home` /
-  `.lan` / `.ts.net` are refused. A public hostname that *resolves* to a private address,
-  or redirects to one, still gets through — closing that needs a resolve-then-connect
-  check on every hop; this is the proportionate half.
+  `.lan` / `.ts.net` are refused. The check runs at connect time, in `guardedFetch`
+  (`src/lib/guarded-fetch.ts`): on the literal host, and on every address a name actually
+  resolves to for that connection, so a public name pointing inside and a redirect leading
+  inside are both refused, with no gap between checking and connecting. The article clipper
+  uses it too, since a Hacker News or newsletter link is chosen by a stranger as well. The
+  route also resolves the name once up front, only to answer "points inside your network"
+  instead of storing a link-only save.
 - **Tracking parameters** (`utm_*`, `fbclid`, `gclid`, `igshid`, …) are stripped before
   storage, so the same article cannot be saved twice under two URLs that differ only in
   how it was shared.

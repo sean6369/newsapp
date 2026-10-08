@@ -9,7 +9,8 @@ import {
   deleteArticle,
 } from "@/lib/db/queries";
 import { LIBRARY_FEED } from "@/lib/types";
-import { buildLibraryClip, isBlockedHost } from "@/lib/library";
+import { buildLibraryClip } from "@/lib/library";
+import { pointsInside } from "@/lib/guarded-fetch";
 import { parsePastedUrl } from "@/lib/paste-url";
 import { LOG_TITLE_LEN } from "@/lib/api-utils";
 
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (isBlockedHost(new URL(url).hostname)) {
+  if (await pointsInside(url)) {
     return NextResponse.json(
       { error: "That link points inside your network" },
       { status: 400 }
