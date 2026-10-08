@@ -6,8 +6,8 @@
 #   docker compose -f docker-compose.local.yml up -d
 #
 # Do NOT use the sibling docker-compose.yml locally. That one is the server's:
-# it declares its own pg_data volume, which Compose would create empty, and it
-# claims the same container name and host port as this file.
+# it claims the same container name as this file, and its pg_data volume is
+# external under a name that does not exist here, so it refuses to start.
 
 name: newsapp-local
 

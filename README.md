@@ -127,10 +127,10 @@ Add `--dry-run` to either `reclip` command to report without writing anything.
 
 ## Deployment
 
-The app is built as a Next.js standalone image and run with Docker Compose alongside
-Postgres and Gotenberg on a homelab server. Secrets are supplied at run time through
-`sops exec-env`. [CLAUDE.md](CLAUDE.md) has the deploy commands, the steps for preparing a
-fresh server, and how to back up and restore the database.
+The app is built as an arm64 Next.js standalone image and run with Docker Compose
+alongside Postgres and Gotenberg on an Oracle Cloud VM, served publicly through a
+Cloudflare tunnel. [CLAUDE.md](CLAUDE.md) has the deploy commands, the steps for preparing
+a fresh server, and how to back up and restore the database.
 
 ## Further reading
 

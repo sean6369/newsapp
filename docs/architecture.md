@@ -344,10 +344,11 @@ would.
 Guards worth knowing about:
 
 - **SSRF.** This is the only fetch in the app aimed by whoever is looking at the page, and
-  the server sits on a home network with a database on it. Literal loopback, link-local,
-  private IPv4 ranges, ULA/link-local IPv6 and `.local` / `.internal` / `.home` / `.lan`
-  are refused. A public hostname that *resolves* to a private address still gets through —
-  closing that needs a resolve-then-connect check; this is the proportionate half.
+  the server sits on a private network with a database and the cloud's instance metadata
+  service (`169.254.169.254`) around it. Literal loopback, link-local, private IPv4
+  ranges, ULA/link-local IPv6 and `.local` / `.internal` / `.home` / `.lan` are refused. A
+  public hostname that *resolves* to a private address still gets through — closing that
+  needs a resolve-then-connect check; this is the proportionate half.
 - **Tracking parameters** (`utm_*`, `fbclid`, `gclid`, `igshid`, …) are stripped before
   storage, so the same article cannot be saved twice under two URLs that differ only in
   how it was shared.

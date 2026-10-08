@@ -4,7 +4,10 @@ services:
     container_name: newsapp-app
     restart: unless-stopped
     ports:
-      - "3002:3000"
+      # Loopback only. Docker's publish rules bypass UFW, so a bare "3002:3000"
+      # would listen on every interface. The public path is the Cloudflare
+      # tunnel, which reaches the app over newsapp-net, not through this port.
+      - "127.0.0.1:3002:3000"
     environment:
       DATABASE_URL: postgresql://newsapp:${POSTGRES_PASSWORD}@db:5432/newsapp
       GEMINI_API_KEY: ${GEMINI_API_KEY}
