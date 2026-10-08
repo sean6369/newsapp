@@ -41,9 +41,9 @@ const BROWSER_HEADERS = {
  *
  * Every other fetch in this app aims at a URL the app itself chose — a
  * configured feed, or a link found inside one. This is the only one aimed by
- * whoever is looking at the page, and the server sits inside a home network
- * with a database and other services on it, so an unfiltered fetch would let a
- * paste reach them and report back what it found.
+ * whoever is looking at the page, and the server sits on a private network
+ * beside a database, a tailnet and the cloud's metadata service, so an
+ * unfiltered fetch would let a paste reach them and report back what it found.
  *
  * Literal addresses and obvious internal suffixes only: a public hostname that
  * resolves to a private address still gets through, which would need a
@@ -51,11 +51,23 @@ const BROWSER_HEADERS = {
  * stops the paste that names the target outright.
  */
 export function isBlockedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  let host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
 
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (/\.(local|internal|home|lan)$/.test(host)) return true;
-  if (host === "::1" || host.startsWith("fe80:") || /^f[cd][0-9a-f]{2}:/.test(host)) return true;
+  // .ts.net is Tailscale's MagicDNS: names under it resolve to tailnet peers.
+  if (/\.(local|internal|home|lan|ts\.net)$/.test(host)) return true;
+  if (host === "::" || host === "::1" || host.startsWith("fe80:") || /^f[cd][0-9a-f]{2}:/.test(host)) return true;
+
+  // IPv4-mapped IPv6 connects to the IPv4 address it carries, so it has to
+  // face the same rules. The URL parser rewrites the dotted spelling into hex —
+  // [::ffff:127.0.0.1] arrives here as ::ffff:7f00:1 — so both are unpacked.
+  const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const [hi, lo] = mappedHex.slice(1).map((h) => parseInt(h, 16));
+    host = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  } else if (host.startsWith("::ffff:")) {
+    host = host.slice("::ffff:".length);
+  }
 
   const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (ipv4) {
@@ -63,6 +75,8 @@ export function isBlockedHost(hostname: string): boolean {
     return (
       a === 0 ||
       a === 10 ||
+      // Carrier-grade NAT space, which is where every Tailscale address lives.
+      (a === 100 && b >= 64 && b <= 127) ||
       a === 127 ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
