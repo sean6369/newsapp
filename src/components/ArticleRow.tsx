@@ -79,28 +79,27 @@ export function ArticleRow({ article, rescoringArticles, menuTrigger, onActiveCh
             {renderTitle ? renderTitle(active) : active.title}
           </h2>
 
-          <div className="flex items-center mt-1">
-            <span className="flex-1 flex items-center gap-2 text-xs text-muted">
+          {/* One line at any width: on a phone the domain truncates before
+              anything wraps, so "3 min" never breaks into "3" over "min". */}
+          <div className="flex items-center gap-2 mt-1">
+            <span className="flex-1 min-w-0 flex items-center gap-2 text-xs text-muted whitespace-nowrap">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`https://www.google.com/s2/favicons?domain=${active.sourceDomain}&sz=16`} alt="" width={14} height={14} className="rounded-sm" />
-              <span>{active.sourceDomain}</span>
-              <span>&middot;</span>
-              <span className={`uppercase tracking-wider font-medium ${feedColor[active.feed] || "text-muted"}`}>{active.feed}</span>
+              <img src={`https://www.google.com/s2/favicons?domain=${active.sourceDomain}&sz=16`} alt="" width={14} height={14} className="rounded-sm shrink-0" />
+              <span className="truncate">{active.sourceDomain}</span>
+              <span className="shrink-0">&middot;</span>
+              <span className={`shrink-0 uppercase tracking-wider font-medium ${feedColor[active.feed] || "text-muted"}`}>{active.feed}</span>
               {active.readingTime > 0 && (
                 <>
-                  <span>&middot;</span>
-                  <span>{active.readingTime} min</span>
+                  <span className="shrink-0">&middot;</span>
+                  <span className="shrink-0">{active.readingTime} min</span>
                 </>
               )}
             </span>
-            <span className="flex-1" />
-            <span className="flex-1 text-right">
-              {!active.clipped && (
-                <span className="text-[12px] italic text-muted">
-                  *summary
-                </span>
-              )}
-            </span>
+            {!active.clipped && (
+              <span className="shrink-0 text-[12px] italic text-muted">
+                *summary
+              </span>
+            )}
           </div>
         </motion.div>
       </AnimatePresence>
