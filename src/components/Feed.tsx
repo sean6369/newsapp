@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useArticles } from "@/hooks/useArticles";
 import { FeedFilter, FeedSearch, FeedSort, MobileSettings, ViewToggle } from "@/components/FeedFilter";
 import { DateNav } from "@/components/DateNav";
 import { ArticleGrid, type ViewMode } from "@/components/ArticleGrid";
-import { FEED_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
+import { FEED_VIEW_COOKIE } from "@/lib/view-cookie";
+import { useViewMode } from "@/hooks/useViewMode";
 import { Masthead } from "@/components/Masthead";
 import { ARCHIVE_TZ } from "@/lib/dates";
 import type { ArticleFilters } from "@/lib/types";
@@ -17,7 +18,7 @@ let hasFetchedOnce = false;
 
 export function Feed({ initialView = "grid", initialFilters }: { initialView?: ViewMode; initialFilters: ArticleFilters }) {
   const { articles, dates, loading, fetching, error, filters, setFilters, refetch, lastFetchTime, rescoringArticles, rescoreArticle, lastRescoredSlug, deleteArticle } = useArticles(initialFilters);
-  const [view, setView] = useState<ViewMode>(initialView);
+  const [view, handleViewChange] = useViewMode(FEED_VIEW_COOKIE, initialView);
   const skipEntranceRef = useRef(hasFetchedOnce);
 
   // Trigger the fetch pipeline only on the first mount (fresh page load).
@@ -39,10 +40,6 @@ export function Feed({ initialView = "grid", initialFilters }: { initialView?: V
       .catch((err) => console.error("[auto-fetch] failed:", err));
   }, [refetch]);
 
-  const handleViewChange = (selected: ViewMode) => {
-    setView(selected);
-    setViewCookie(FEED_VIEW_COOKIE, selected);
-  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8 pb-24 md:pb-28">

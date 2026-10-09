@@ -29,7 +29,8 @@ import { SEARCH_PAGE_SIZE, DEFAULT_SEARCH_SORT } from "@/lib/types";
 import { mergeStoryPage } from "@/lib/group-stories";
 import { ArticleTimeline, formatShortDate, toDateStr } from "./ArticleTimeline";
 import { FeedFilter, MobileSettings, SEARCH_FEED_OPTIONS } from "./FeedFilter";
-import { SEARCH_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
+import { SEARCH_VIEW_COOKIE } from "@/lib/view-cookie";
+import { useViewMode } from "@/hooks/useViewMode";
 import { SearchSnippet, HighlightedText } from "./SearchSnippet";
 import type { ViewMode } from "./ArticleGrid";
 import {
@@ -121,7 +122,7 @@ export function SearchPage({
   const [feed, setFeed] = useState<FeedType | "all">("all");
   const [range, setRange] = useState<DateRange | null>(null);
   const [sort, setSort] = useState<SearchSortMode>(DEFAULT_SEARCH_SORT);
-  const [view, setView] = useState<ViewMode>(initialView);
+  const [view, handleViewChange] = useViewMode(SEARCH_VIEW_COOKIE, initialView);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const tips = useTapTooltip();
   // Starts true so a deep link with ?q= — which renders the toolbar without
@@ -243,10 +244,6 @@ export function SearchPage({
     }
   }
 
-  const handleViewChange = (selected: ViewMode) => {
-    setView(selected);
-    setViewCookie(SEARCH_VIEW_COOKIE, selected);
-  };
 
   // Rendered twice — inside the desktop popover and inside the mobile settings
   // drawer — so `onDone` is whichever overlay is currently holding it.

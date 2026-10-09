@@ -9,7 +9,8 @@ import { useLibrary } from "@/hooks/useLibrary";
 import { LibraryGrid } from "@/components/LibraryGrid";
 import { SearchInput, ViewToggle } from "@/components/FeedFilter";
 import type { ViewMode } from "@/components/ArticleGrid";
-import { LIBRARY_VIEW_COOKIE, setViewCookie } from "@/lib/view-cookie";
+import { LIBRARY_VIEW_COOKIE } from "@/lib/view-cookie";
+import { useViewMode } from "@/hooks/useViewMode";
 
 /** The box growing from button to field. Springy enough to feel physical. */
 const EXPAND_TRANSITION = { type: "spring", duration: 0.4, bounce: 0.15 } as const;
@@ -72,7 +73,7 @@ function PasteShortcut({
 export function LibraryPage({ initialView = "grid" }: { initialView?: ViewMode }) {
   const { articles, search, setSearch, loading, error, pending, clip, removeArticle } =
     useLibrary();
-  const [view, setView] = useState<ViewMode>(initialView);
+  const [view, handleViewChange] = useViewMode(LIBRARY_VIEW_COOKIE, initialView);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -131,10 +132,6 @@ export function LibraryPage({ initialView = "grid" }: { initialView?: ViewMode }
     collapse();
   };
 
-  const handleViewChange = (selected: ViewMode) => {
-    setView(selected);
-    setViewCookie(LIBRARY_VIEW_COOKIE, selected);
-  };
 
   const searching = search.trim().length > 0;
   const isEmpty = !loading && articles.length === 0 && pending.length === 0;
