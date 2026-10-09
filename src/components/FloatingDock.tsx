@@ -52,31 +52,38 @@ function FloatingDockMobile({
 
   return (
     <div className={`block md:hidden ${className}`}>
+      {/* The dots animate `transform` and `opacity` rather than `y`: Motion
+          hands those two to the compositor, where `y` is stepped on the main
+          thread. Navigating to the feed mounts a page heavy enough to block
+          that thread for several hundred milliseconds, and a main-thread exit
+          froze mid-stagger there, with the dots stopped at different heights. */}
       <AnimatePresence>
         {open && (
-          <motion.div
-            layoutId="nav"
-            className="absolute bottom-full mb-2 inset-x-0 flex flex-col gap-2"
-          >
+          <motion.div className="absolute bottom-full mb-2 inset-x-0 flex flex-col gap-2">
             {items.map((item, idx) => (
               <motion.div
                 key={item.title}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, transform: "translateY(10px)" }}
+                animate={{ opacity: 1, transform: "translateY(0px)" }}
                 exit={{
                   opacity: 0,
-                  y: 10,
+                  transform: "translateY(10px)",
                   transition: { delay: idx * 0.05 },
                 }}
                 transition={{
                   delay: (items.length - 1 - idx) * 0.05,
                 }}
               >
+                {/* Closed on the tap rather than left to the pathname effect
+                    above, which only fires once the next page has rendered —
+                    for the feed, a server round trip and a long mount later,
+                    with the menu sitting open the whole time. */}
                 <Link
                   href={item.href}
-                  className="h-10 w-10 rounded-full bg-card-bg border border-border flex items-center justify-center"
+                  onClick={() => setOpen(false)}
+                  className="h-11 w-11 rounded-full bg-card-bg border border-border flex items-center justify-center"
                 >
-                  <div className="h-4 w-4">{item.icon}</div>
+                  <div className="h-[18px] w-[18px]">{item.icon}</div>
                 </Link>
               </motion.div>
             ))}
@@ -85,10 +92,10 @@ function FloatingDockMobile({
       </AnimatePresence>
       <button
         onClick={() => setOpen(!open)}
-        className="h-10 w-10 rounded-full bg-card-bg border border-border flex items-center justify-center shadow-sm"
+        className="h-11 w-11 rounded-full bg-card-bg border border-border flex items-center justify-center shadow-sm"
       >
         <ChevronUp
-          className={`h-5 w-5 text-muted transition-transform duration-300 ${
+          className={`h-[22px] w-[22px] text-muted transition-transform duration-300 ${
             open ? "rotate-180" : "rotate-0"
           }`}
         />
