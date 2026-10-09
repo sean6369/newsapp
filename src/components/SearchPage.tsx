@@ -16,6 +16,7 @@ import {
 } from "@heroui/react";
 import { Info, Search as SearchIcon, X } from "lucide-react";
 import { PromptField, PromptFieldButton } from "./PromptField";
+import { useTapTooltip } from "@/hooks/useTapTooltip";
 import { parseDate } from "@internationalized/date";
 import type { DateValue } from "@internationalized/date";
 import type {
@@ -122,7 +123,7 @@ export function SearchPage({
   const [sort, setSort] = useState<SearchSortMode>(DEFAULT_SEARCH_SORT);
   const [view, setView] = useState<ViewMode>(initialView);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [tipsOpen, setTipsOpen] = useState(false);
+  const tips = useTapTooltip();
   // Starts true so a deep link with ?q= — which renders the toolbar without
   // animating it in — is never clipped.
   const [toolbarSettled, setToolbarSettled] = useState(true);
@@ -564,19 +565,14 @@ export function SearchPage({
 
             {/* The syntax is worth knowing but not worth a wall of text on an
                 otherwise empty page, so it hides behind one line. Controlled
-                rather than left to react-aria's hover/focus alone: a tooltip
-                that only opens on hover is unreachable on a phone, and the
-                click handler below is what gives touch a way in. */}
+                through useTapTooltip rather than left to react-aria's
+                hover/focus alone: a tooltip that only opens on hover is
+                unreachable on a phone. */}
             <div className="mt-4 flex justify-center">
-              <Tooltip.Root
-                isOpen={tipsOpen}
-                onOpenChange={setTipsOpen}
-                delay={150}
-                closeDelay={150}
-              >
+              <Tooltip.Root {...tips.rootProps} delay={150} closeDelay={150}>
                 <Tooltip.Trigger
+                  {...tips.triggerProps}
                   aria-label="Search tips"
-                  onClick={() => setTipsOpen((open) => !open)}
                   className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-accent/40 hover:text-foreground"
                 >
                   <Info className="h-3.5 w-3.5" aria-hidden />

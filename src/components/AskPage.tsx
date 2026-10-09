@@ -6,6 +6,7 @@ import { Disclosure, Tooltip } from "@heroui/react";
 import { Search, FileText, Info, SquarePen } from "lucide-react";
 import { useChat } from "@/hooks/useChat";
 import { newConversationId, useConversations } from "@/hooks/useConversations";
+import { useTapTooltip } from "@/hooks/useTapTooltip";
 import { fallbackTitle } from "@/lib/conversation-title";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
@@ -554,7 +555,7 @@ export function AskPage() {
    */
   const savedSignature = useRef("");
 
-  const [tipsOpen, setTipsOpen] = useState(false);
+  const tips = useTapTooltip();
   const [greetings] = useState(() => greetingsFor(new Date().getHours()));
   const [greetingIndex, setGreetingIndex] = useState(0);
 
@@ -1023,9 +1024,9 @@ export function AskPage() {
                 about to travel through, so the first question had it moving
                 out of the way of the thing it was explaining.
 
-                Controlled rather than left to react-aria's hover/focus alone
-                — a tooltip that only opens on hover is unreachable on a
-                phone, and the click handler is what gives touch a way in. */}
+                Controlled through useTapTooltip rather than left to
+                react-aria's hover/focus alone — a tooltip that only opens on
+                hover is unreachable on a phone. */}
             {/* Same arrangement as the greeting above: the presence guard
                 skips only the first page load, the margin sits inside the
                 animated box, and the hint expands and fades on the composer's
@@ -1047,15 +1048,10 @@ export function AskPage() {
                   className="overflow-hidden"
                 >
                   <div className="mt-8 flex justify-center md:mt-10">
-                    <Tooltip.Root
-                      isOpen={tipsOpen}
-                      onOpenChange={setTipsOpen}
-                      delay={150}
-                      closeDelay={150}
-                    >
+                    <Tooltip.Root {...tips.rootProps} delay={150} closeDelay={150}>
                       <Tooltip.Trigger
+                        {...tips.triggerProps}
                         aria-label="How Ask works"
-                        onClick={() => setTipsOpen((open) => !open)}
                         className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-accent/40 hover:text-foreground"
                       >
                         <Info className="h-3.5 w-3.5" aria-hidden />

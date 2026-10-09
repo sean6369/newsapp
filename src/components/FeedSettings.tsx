@@ -6,6 +6,7 @@ import { Info } from "lucide-react";
 import type { FeedSourceGroup, FeedSourceState } from "@/lib/feed-sources";
 import { contentColumn } from "./hero-shared";
 import { useReadMarks } from "./ReadMarks";
+import { useTapTooltip } from "@/hooks/useTapTooltip";
 
 /**
  * The host a source is read from, as a reader would recognise it.
@@ -27,6 +28,9 @@ interface FeedSettingsProps {
 }
 
 export function FeedSettings({ groups }: FeedSettingsProps) {
+  const readMarksTip = useTapTooltip();
+  const feedsTip = useTapTooltip();
+
   /**
    * The switches, flat, keyed by source id.
    *
@@ -183,8 +187,9 @@ export function FeedSettings({ groups }: FeedSettingsProps) {
                 It still says what switching *off* does as well as what on
                 does, because off is the destructive direction and the marks
                 do not come back. */}
-            <Tooltip delay={200}>
+            <Tooltip delay={200} {...readMarksTip.rootProps}>
               <Tooltip.Trigger
+                {...readMarksTip.triggerProps}
                 className="text-muted hover:text-foreground"
                 aria-label="What marking articles as read does"
               >
@@ -215,8 +220,9 @@ export function FeedSettings({ groups }: FeedSettingsProps) {
 
                 `break-normal` undoes the tooltip's default `break-all`, which
                 is meant for URLs and would hyphenate this mid-word. */}
-            <Tooltip delay={200}>
+            <Tooltip delay={200} {...feedsTip.rootProps}>
               <Tooltip.Trigger
+                {...feedsTip.triggerProps}
                 className="text-muted hover:text-foreground"
                 aria-label="What switching a source off does"
               >
