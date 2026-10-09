@@ -2,7 +2,7 @@ import { format } from "date-fns";
 import { fetchDigestUrls, scrapeDigestPage, fetchCNAArticles, fetchSTArticles } from "./feeds";
 import { resolveFeedSources } from "./feed-sources";
 import { clipArticle } from "./clipper";
-import { buildArticle, estimateReadingTime } from "./articles";
+import { buildArticle } from "./articles";
 import {
   insertArticle,
   getExistingArticles,
@@ -185,20 +185,18 @@ export async function runFetchPipeline(options?: {
           sourceUrl?: string;
           content?: string;
           clipped?: boolean;
-          readingTime?: number;
         } = {};
         if (titleChanged) updates.title = a.title;
         if (urlChanged) updates.sourceUrl = a.sourceUrl;
 
-        // Re-clip from the current URL. The flag and the reading time move with
-        // the body: this is the one path that can clip an article which failed
-        // at ingest, and writing the text alone would leave it a full article
-        // still wearing the `*summary` tag and showing no reading time.
+        // Re-clip from the current URL. The flag moves with the body: this is
+        // the one path that can clip an article which failed at ingest, and
+        // writing the text alone would leave it a full article still wearing
+        // the `*summary` tag.
         const reclipped = await clipArticle(a.sourceUrl);
         if (reclipped) {
           updates.content = reclipped.content;
           updates.clipped = true;
-          updates.readingTime = estimateReadingTime(reclipped.content);
         }
 
         try {

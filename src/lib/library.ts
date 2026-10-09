@@ -1,7 +1,7 @@
 import { JSDOM } from "jsdom";
 import { clipArticle } from "./clipper";
 import { guardedFetch } from "./guarded-fetch";
-import { estimateReadingTime, extractDomain, makeSlug, stripMarkdown, stubContent } from "./articles";
+import { extractDomain, makeSlug, stripMarkdown, stubContent } from "./articles";
 import { archiveToday } from "./dates";
 import { LIBRARY_FEED, type Article } from "./types";
 
@@ -9,8 +9,8 @@ import { LIBRARY_FEED, type Article } from "./types";
  * Building a stored article out of nothing but a URL.
  *
  * The pipeline never has to do this: a feed item arrives with a title, a
- * summary, a publication date and a reading time already attached, and
- * `clipArticle` only supplies the body. A pasted link has none of that, so
+ * summary and a publication date already attached, and `clipArticle` only
+ * supplies the body. A pasted link has none of that, so
  * everything the card and the reader show has to be recovered from the page
  * itself — and recovered without a model call, since the library is
  * reader-paced and unbudgeted while the Gemini quota is neither.
@@ -129,8 +129,6 @@ export async function buildLibraryClip(
 
   const summary = truncate(preferred || body, SUMMARY_LIMIT) || `Saved from ${sourceDomain}`;
 
-  const readingTime = clipped ? estimateReadingTime(clipped.content) : 0;
-
   // Namespaced rather than the bare URL `extractSourceId` would return, so a
   // clip and the pipeline's copy of the same article stay distinct rows under
   // the unique index on `source_id`. They cannot both exist — `source_url` is
@@ -150,7 +148,9 @@ export async function buildLibraryClip(
     // ordered by when the reader kept something, and the page's own date is
     // not reliably available without a model call.
     date: archiveToday(),
-    readingTime,
+    // Reading times come only from a source that publishes one, and a pasted
+    // page is not a feed. We do not estimate our own.
+    readingTime: 0,
     clipped: clipped !== null,
     library: true,
     savedAt: new Date().toISOString(),

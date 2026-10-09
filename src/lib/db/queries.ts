@@ -420,24 +420,19 @@ export async function getUnclippedArticles(
  * clipped while still holding the "[Read the original article]" stub would
  * render as a full article with one link in it.
  *
- * `readingTime` only fills a gap, never overwrites. For a feed article the
- * column is metadata the source supplied at ingest and has nothing to do with
- * clipping: TLDR sends one, CNA and ST RSS do not. Overwriting would replace a
- * publisher's own figure with an estimate, while leaving a zero in place would
- * withhold a figure we can now measure — so the estimate is used exactly where
- * there was nothing, which is also what the paste flow does.
+ * `readingTime` is left alone. It is metadata the source supplied at ingest —
+ * TLDR sends one, CNA and ST RSS do not — and has nothing to do with whether
+ * we hold the body. We never estimate our own.
  */
 export async function markArticleClipped(
   slug: string,
-  content: string,
-  readingTime: number
+  content: string
 ): Promise<void> {
   await db
     .update(articles)
     .set({
       content,
       clipped: true,
-      readingTime: sql`case when ${articles.readingTime} = 0 then ${readingTime} else ${articles.readingTime} end`,
       updatedAt: new Date(),
     })
     .where(eq(articles.slug, slug));
@@ -492,9 +487,10 @@ export async function getClipsContaining(
  * Withdraw a clip, returning the row to the state a failed clip would have
  * left it in.
  *
- * The inverse of `markArticleClipped`, and it has to move all three fields for
- * the same reason: a row left holding teaser text while `clipped` goes false
- * would show the `*summary` tag above a body that still looks like an article.
+ * The inverse of `markArticleClipped`, and it has to move both fields for the
+ * same reason: a row left holding teaser text while `clipped` goes false would
+ * show the `*summary` tag above a body that still looks like an article. The
+ * reading time stays, since it describes the original, not our copy.
  */
 export async function markArticleUnclipped(
   slug: string,
@@ -502,7 +498,7 @@ export async function markArticleUnclipped(
 ): Promise<void> {
   await db
     .update(articles)
-    .set({ content: stub, readingTime: 0, clipped: false, updatedAt: new Date() })
+    .set({ content: stub, clipped: false, updatedAt: new Date() })
     .where(eq(articles.slug, slug));
 }
 
@@ -522,7 +518,6 @@ export async function updateArticleMetadata(
      * that needs `markArticleUnclipped`, which also restores the stub.
      */
     clipped?: boolean;
-    readingTime?: number;
   }
 ): Promise<void> {
   const setClause: Record<string, unknown> = { updatedAt: new Date() };
@@ -530,7 +525,6 @@ export async function updateArticleMetadata(
   if (updates.sourceUrl !== undefined) setClause.sourceUrl = updates.sourceUrl;
   if (updates.summary !== undefined) setClause.summary = updates.summary;
   if (updates.clipped !== undefined) setClause.clipped = updates.clipped;
-  if (updates.readingTime !== undefined) setClause.readingTime = updates.readingTime;
   if (updates.content !== undefined) {
     setClause.content = updates.content;
   }

@@ -1,5 +1,5 @@
 import { clipArticle, TRUNCATION_MARKER_PHRASES } from "./clipper";
-import { estimateReadingTime, stubContent } from "./articles";
+import { stubContent } from "./articles";
 import {
   countClippedArticles,
   getClipsContaining,
@@ -94,11 +94,7 @@ export async function reclipFailed(options?: {
 
     try {
       if (!dryRun) {
-        await markArticleClipped(
-          article.slug,
-          clipped.content,
-          estimateReadingTime(clipped.content)
-        );
+        await markArticleClipped(article.slug, clipped.content);
       }
     } catch (error) {
       console.warn(`[reclip] Could not write ${article.slug}:`, error);
@@ -179,7 +175,7 @@ export async function repairTruncatedClips(options?: {
     try {
       if (!dryRun) {
         if (fresh) {
-          await markArticleClipped(article.slug, fresh.content, estimateReadingTime(fresh.content));
+          await markArticleClipped(article.slug, fresh.content);
         } else {
           await markArticleUnclipped(article.slug, stubContent(article.sourceUrl));
         }

@@ -51,14 +51,11 @@ export function makeSlug(title: string, sourceId: string): string {
   return base ? `${base}-${suffix}` : `article-${suffix}`;
 }
 
-/** Words a minute, for the reading-time estimate. The usual prose figure. */
-const WORDS_PER_MINUTE = 200;
-
 /**
  * Markdown to plain prose.
  *
- * Used for counting words and for the library's summary fallback — both want
- * the sentences without the syntax carrying them.
+ * Used for the library's summary fallback, which wants the sentences without
+ * the syntax carrying them.
  */
 export function stripMarkdown(markdown: string): string {
   return markdown
@@ -71,20 +68,6 @@ export function stripMarkdown(markdown: string): string {
     .replace(/\\(.)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/**
- * Reading-time estimate for a clipped body, in minutes. Zero for no body.
- *
- * Lives here rather than beside the paste flow because every path that can
- * supply a body needs it: ingest, a pasted link, the pipeline's re-clip after
- * a feed retitles something, and the retry pass. A row stored while its clip
- * was failing holds `0`, and whichever path later supplies the text has to
- * recompute this with it or the card keeps hiding the "N min" chip.
- */
-export function estimateReadingTime(markdown: string): number {
-  const words = stripMarkdown(markdown).split(/\s+/).filter(Boolean).length;
-  return words ? Math.max(1, Math.round(words / WORDS_PER_MINUTE)) : 0;
 }
 
 /**
@@ -151,7 +134,7 @@ export function buildArticleMarkdownHeader(article: {
     `- **Source:** [${article.sourceDomain}](${article.sourceUrl})`,
     `- **Date:** ${article.date}`,
     `- **Feed:** ${article.feed}`,
-    `- **Reading time:** ${article.readingTime} min`,
+    ...(article.readingTime > 0 ? [`- **Reading time:** ${article.readingTime} min`] : []),
     "",
     "---",
     "",

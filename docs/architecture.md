@@ -332,7 +332,7 @@ Your own clippings, plus anything from the feed you chose to keep.
 Paste a URL — ⌘V works anywhere on the page, not just in a field — and `POST /api/library`
 fetches it, extracts the readable article with Mozilla Readability, converts it to
 Markdown with Turndown (GFM tables, fenced code, trusted iframes preserved), and derives
-everything a card needs — title, summary, reading time, domain — **without a model call**,
+everything a card needs — title, summary, domain — **without a model call**,
 since the library is reader-paced and unbudgeted while the Gemini quota is neither. A
 page's own meta description wins over its opening lines as a summary only if it is long
 enough to be about *that page* rather than the whole site.
